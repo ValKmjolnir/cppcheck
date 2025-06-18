@@ -128,6 +128,12 @@ namespace {
             reportOut(msg.toXML());
         }
 
+        void reportMetric(const std::string &metric) override
+        {
+            /* Not used here */
+            (void) metric;
+        }
+
         void reportProgress(const std::string & /*filename*/, const char /*stage*/[], const std::size_t /*value*/) override
         {}
     };
@@ -232,6 +238,7 @@ bool CmdLineParser::fillSettingsFromArgs(int argc, const char* const argv[])
             {
                 if (mSettings.library.markupFile(fs.filename()))
                     continue;
+                assert(fs.file.lang() == Standards::Language::None);
                 bool header = false;
                 fs.file.setLang(Path::identify(fs.filename(), mSettings.cppHeaderProbe, &header));
                 // unknown extensions default to C++
@@ -244,6 +251,7 @@ bool CmdLineParser::fillSettingsFromArgs(int argc, const char* const argv[])
         for (auto& fs : fileSettings)
         {
             if (mSettings.library.markupFile(fs.filename())) {
+                assert(fs.file.lang() == Standards::Language::None);
                 fs.file.setLang(Standards::Language::C);
             }
         }
@@ -306,9 +314,7 @@ bool CmdLineParser::fillSettingsFromArgs(int argc, const char* const argv[])
 
         std::list<FileWithDetails> files;
         if (!mSettings.fileFilters.empty()) {
-            std::copy_if(filesResolved.cbegin(), filesResolved.cend(), std::inserter(files, files.end()), [&](const FileWithDetails& entry) {
-                return matchglobs(mSettings.fileFilters, entry.path());
-            });
+            files = filterFiles(mSettings.fileFilters, filesResolved);
             if (files.empty()) {
                 mLogger.printError("could not find any files matching the filter.");
                 return false;
@@ -441,7 +447,9 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
     bool def = false;
     bool maxconfigs = false;
 
+    ImportProject::Type projectType = ImportProject::Type::NONE;
     ImportProject project;
+    std::string vsConfig;
 
     bool executorAuto = true;
 
@@ -542,6 +550,9 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         else if (std::strncmp(argv[i],"--addon-python=", 15) == 0)
             mSettings.addonPython.assign(argv[i]+15);
 
+        else if (std::strcmp(argv[i],"--analyze-all-vs-configs") == 0)
+            mSettings.analyzeAllVsConfigs = true;
+
         // Check configuration
         else if (std::strcmp(argv[i], "--check-config") == 0)
             mSettings.checkConfiguration = true;
@@ -603,6 +614,15 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
             mSettings.clangExecutable = argv[i] + 8;
         }
 
+        else if (std::strcmp(argv[i], "--clang-tidy") == 0) {
+            mSettings.clangTidy = true;
+        }
+
+        else if (std::strncmp(argv[i], "--clang-tidy=", 13) == 0) {
+            mSettings.clangTidy = true;
+            mSettings.clangTidyExecutable = argv[i] + 13;
+        }
+
         else if (std::strncmp(argv[i], "--config-exclude=",17) ==0) {
             mSettings.configExcludePaths.insert(Path::fromNativeSeparators(argv[i] + 17));
         }
@@ -630,6 +650,9 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         else if (std::strcmp(argv[i], "--cpp-header-probe") == 0) {
             mSettings.cppHeaderProbe = true;
         }
+
+        else if (std::strcmp(argv[i], "--debug-ast") == 0)
+            mSettings.debugast = true;
 
         // Show debug warnings for lookup for configuration files
         else if (std::strcmp(argv[i], "--debug-clang-output") == 0)
@@ -671,9 +694,15 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         else if (std::strcmp(argv[i], "--debug-simplified") == 0)
             mSettings.debugSimplified = true;
 
+        else if (std::strcmp(argv[i], "--debug-symdb") == 0)
+            mSettings.debugsymdb = true;
+
         // Show template information
         else if (std::strcmp(argv[i], "--debug-template") == 0)
             mSettings.debugtemplate = true;
+
+        else if (std::strcmp(argv[i], "--debug-valueflow") == 0)
+            mSettings.debugvalueflow = true;
 
         // Show debug warnings
         else if (std::strcmp(argv[i], "--debug-warnings") == 0)
@@ -1007,6 +1036,9 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
                 return Result::Fail;
         }
 
+        else if (std::strcmp(argv[i],"--no-analyze-all-vs-configs") == 0)
+            mSettings.analyzeAllVsConfigs = false;
+
         else if (std::strcmp(argv[i], "--no-check-headers") == 0)
             mSettings.checkHeaders = false;
 
@@ -1074,10 +1106,14 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
             // TODO: remove
             // these are loaded via external files and thus have Settings::PlatformFile set instead.
             // override the type so they behave like the regular platforms.
-            if (platform == "unix32-unsigned")
+            if (platform == "unix32-unsigned") {
                 mSettings.platform.type = Platform::Type::Unix32;
-            else if (platform == "unix64-unsigned")
+                mLogger.printMessage("The platform 'unix32-unsigned' has been deprecated and will be removed in Cppcheck 2.19. Please use '--platform=unix32 --funsigned-char' instead");
+            }
+            else if (platform == "unix64-unsigned") {
                 mSettings.platform.type = Platform::Type::Unix64;
+                mLogger.printMessage("The platform 'unix64-unsigned' has been deprecated and will be removed in Cppcheck 2.19. Please use '--platform=unix64 --funsigned-char' instead");
+            }
         }
 
         // Write results in results.plist
@@ -1110,14 +1146,19 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
                 "cert-c-2016",
                 "cert-c++-2016",
                 "cert-cpp-2016",
+                "cert-c",
+                "cert-c++",
+                "metrics",
                 "misra-c-2012",
                 "misra-c-2023",
+                "misra-c-2025",
                 "misra-c++-2008",
                 "misra-cpp-2008",
                 "misra-c++-2023",
                 "misra-cpp-2023",
                 "bughunting",
-                "safety"};
+                "safety",
+                "debug-progress"};
             // valid options --premium-..=
             const std::set<std::string> valid2{
                 "cert-c-int-precision",
@@ -1139,8 +1180,6 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
                 return Result::Fail;
             }
             mSettings.premiumArgs += "--" + p;
-            if (p == "misra-c-2012" || p == "misra-c-2023")
-                mSettings.addons.emplace("misra");
             if (startsWith(p, "autosar") || startsWith(p, "cert") || startsWith(p, "misra")) {
                 // All checkers related to the coding standard should be enabled. The coding standards
                 // do not all undefined behavior or portability issues.
@@ -1151,7 +1190,7 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
 
         // --project
         else if (std::strncmp(argv[i], "--project=", 10) == 0) {
-            if (project.projectType != ImportProject::Type::NONE)
+            if (projectType != ImportProject::Type::NONE)
             {
                 mLogger.printError("multiple --project options are not supported.");
                 return Result::Fail;
@@ -1159,9 +1198,8 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
 
             mSettings.checkAllConfigurations = false;     // Can be overridden with --max-configs or --force
             std::string projectFile = argv[i]+10;
-            ImportProject::Type projType = project.import(projectFile, &mSettings, &mSuppressions);
-            project.projectType = projType;
-            if (projType == ImportProject::Type::CPPCHECK_GUI) {
+            projectType = project.import(projectFile, &mSettings, &mSuppressions);
+            if (projectType == ImportProject::Type::CPPCHECK_GUI) {
                 for (const std::string &lib : project.guiProject.libraries)
                     mSettings.libraries.emplace_back(lib);
 
@@ -1184,27 +1222,25 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
                 if (!projectFileGui.empty()) {
                     // read underlying project
                     projectFile = projectFileGui;
-                    projType = project.import(projectFileGui, &mSettings, &mSuppressions);
-                    if (projType == ImportProject::Type::CPPCHECK_GUI) {
+                    projectType = project.import(projectFileGui, &mSettings, &mSuppressions);
+                    if (projectType == ImportProject::Type::CPPCHECK_GUI) {
                         mLogger.printError("nested Cppcheck GUI projects are not supported.");
                         return Result::Fail;
                     }
                 }
             }
-            if (projType == ImportProject::Type::VS_SLN || projType == ImportProject::Type::VS_VCXPROJ) {
-                if (project.guiProject.analyzeAllVsConfigs == "false")
-                    project.selectOneVsConfig(mSettings.platform.type);
+            if (projectType == ImportProject::Type::VS_SLN || projectType == ImportProject::Type::VS_VCXPROJ) {
                 mSettings.libraries.emplace_back("windows");
             }
-            if (projType == ImportProject::Type::MISSING) {
+            if (projectType == ImportProject::Type::MISSING) {
                 mLogger.printError("failed to open project '" + projectFile + "'. The file does not exist.");
                 return Result::Fail;
             }
-            if (projType == ImportProject::Type::UNKNOWN) {
+            if (projectType == ImportProject::Type::UNKNOWN) {
                 mLogger.printError("failed to load project '" + projectFile + "'. The format is unknown.");
                 return Result::Fail;
             }
-            if (projType == ImportProject::Type::FAILURE) {
+            if (projectType == ImportProject::Type::FAILURE) {
                 mLogger.printError("failed to load project '" + projectFile + "'. An error occurred.");
                 return Result::Fail;
             }
@@ -1212,10 +1248,15 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
 
         // --project-configuration
         else if (std::strncmp(argv[i], "--project-configuration=", 24) == 0) {
-            mVSConfig = argv[i] + 24;
-            // TODO: provide error when this does nothing
-            if (!mVSConfig.empty() && (project.projectType == ImportProject::Type::VS_SLN || project.projectType == ImportProject::Type::VS_VCXPROJ))
-                project.ignoreOtherConfigs(mVSConfig);
+            vsConfig = argv[i] + 24;
+            if (vsConfig.empty()) {
+                mLogger.printError("--project-configuration parameter is empty.");
+                return Result::Fail;
+            }
+            if (projectType != ImportProject::Type::VS_SLN && projectType != ImportProject::Type::VS_VCXPROJ) {
+                mLogger.printError("--project-configuration has no effect - no Visual Studio project provided.");
+                return Result::Fail;
+            }
         }
 
         // Only print something when there are errors
@@ -1585,9 +1626,25 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         //mLogger.printMessage("whole program analysis requires --cppcheck-build-dir to be active with -j.");
     }
 
-    if (!mPathNames.empty() && project.projectType != ImportProject::Type::NONE) {
+    if (!mPathNames.empty() && projectType != ImportProject::Type::NONE) {
         mLogger.printError("--project cannot be used in conjunction with source files.");
         return Result::Fail;
+    }
+
+    // TODO: conflicts with analyzeAllVsConfigs
+    if (!vsConfig.empty()) {
+        // TODO: bail out when this does nothing
+        project.ignoreOtherConfigs(vsConfig);
+    }
+
+    if (!mSettings.analyzeAllVsConfigs) {
+        if (projectType != ImportProject::Type::VS_SLN && projectType != ImportProject::Type::VS_VCXPROJ) {
+            mLogger.printError("--no-analyze-all-vs-configs has no effect - no Visual Studio project provided.");
+            return Result::Fail;
+        }
+
+        // TODO: bail out when this does nothing
+        project.selectOneVsConfig(mSettings.platform.type);
     }
 
     if (!mSettings.buildDir.empty() && !Path::isDirectory(mSettings.buildDir)) {
@@ -1608,8 +1665,10 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         path = Path::simplifyPath(std::move(path));
 
         bool isdir = false;
-        if (!Path::exists(path, &isdir) && mSettings.debugignore)
-            std::cout << "path to ignore does not exist: " << path << std::endl;
+        if (!Path::exists(path, &isdir) && mSettings.debugignore) {
+            // FIXME: this is misleading because we match from the end of the path so it does not require to exist
+            //std::cout << "path to ignore does not exist: " << path << std::endl;
+        }
         // TODO: this only works when it exists
         if (isdir) {
             // If directory name doesn't end with / or \, add it
@@ -1853,10 +1912,11 @@ void CmdLineParser::printHelp() const
             "    --premium=<option>\n"
             "                         Coding standards:\n"
             "                          * autosar           Autosar (partial)\n"
-            "                          * cert-c-2016       Cert C 2016 checking\n"
-            "                          * cert-c++-2016     Cert C++ 2016 checking\n"
+            "                          * cert-c            Cert C checking\n"
+            "                          * cert-c++          Cert C++ checking\n"
             "                          * misra-c-2012      Misra C 2012\n"
             "                          * misra-c-2023      Misra C 2023\n"
+            "                          * misra-c-2025      Misra C 2025\n"
             "                          * misra-c++-2008    Misra C++ 2008\n"
             "                          * misra-c++-2023    Misra C++ 2023\n"
             "                         Other:\n"
@@ -2138,3 +2198,16 @@ bool CmdLineParser::loadCppcheckCfg()
     return true;
 }
 
+std::list<FileWithDetails> CmdLineParser::filterFiles(const std::vector<std::string>& fileFilters,
+                                                      const std::list<FileWithDetails>& filesResolved) {
+    std::list<FileWithDetails> files;
+#ifdef _WIN32
+    constexpr bool caseInsensitive = true;
+#else
+    constexpr bool caseInsensitive = false;
+#endif
+    std::copy_if(filesResolved.cbegin(), filesResolved.cend(), std::inserter(files, files.end()), [&](const FileWithDetails& entry) {
+        return matchglobs(fileFilters, entry.path(), caseInsensitive) || matchglobs(fileFilters, entry.spath(), caseInsensitive);
+    });
+    return files;
+}

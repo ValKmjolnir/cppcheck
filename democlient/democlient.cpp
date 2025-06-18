@@ -67,7 +67,7 @@ public:
     {}
 
     void run(const char code[]) {
-        cppcheck.check(FileWithDetails("test.cpp"), code);
+        cppcheck.check(FileWithDetails("test.cpp", Standards::Language::CPP, 0), code);
     }
 
     void reportOut(const std::string & /*outmsg*/, Color /*c*/) override {}
@@ -81,6 +81,7 @@ public:
         if (logfile != nullptr)
             std::fprintf(logfile, "%s\n", s.c_str());
     }
+    void reportMetric(const std::string & /*metric*/) override {}
 
     void reportProgress(const std::string& /*filename*/,
                         const char /*stage*/[],

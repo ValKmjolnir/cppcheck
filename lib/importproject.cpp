@@ -42,6 +42,7 @@
 #include "json.h"
 
 // TODO: align the exclusion logic with PathMatch
+// TODO: PathMatch lacks glob support
 void ImportProject::ignorePaths(const std::vector<std::string> &ipaths, bool debug)
 {
     for (auto it = fileSettings.cbegin(); it != fileSettings.cend();) {
@@ -305,7 +306,7 @@ void ImportProject::fsParseCommand(FileSettings& fs, const std::string& command)
                 defs += defval;
             defs += ';';
         } else if (F=='U')
-            fs.undefs.insert(fval);
+            fs.undefs.insert(std::move(fval));
         else if (F=='I') {
             std::string i = std::move(fval);
             if (i.size() > 1 && i[0] == '\"' && i.back() == '\"')
@@ -354,8 +355,21 @@ bool ImportProject::importCompileCommands(std::istream &istr)
         return false;
     }
 
+    std::map<std::string, int> fileIndex;
+
     for (const picojson::value &fileInfo : compileCommands.get<picojson::array>()) {
         picojson::object obj = fileInfo.get<picojson::object>();
+
+        if (obj.count("directory") == 0) {
+            printError("'directory' field in compilation database entry missing");
+            return false;
+        }
+
+        if (!obj["directory"].is<std::string>()) {
+            printError("'directory' field in compilation database entry is not a string");
+            return false;
+        }
+
         std::string dirpath = Path::fromNativeSeparators(obj["directory"].get<std::string>());
 
         /* CMAKE produces the directory without trailing / so add it if not
@@ -419,10 +433,13 @@ bool ImportProject::importCompileCommands(std::istream &istr)
             printError("'" + path + "' from compilation database does not exist");
             return false;
         }
-        FileSettings fs{std::move(path)};
+        FileSettings fs{path, Standards::Language::None, 0}; // file will be identified later on
         fsParseCommand(fs, command); // read settings; -D, -I, -U, -std, -m*, -f*
         std::map<std::string, std::string, cppcheck::stricmp> variables;
         fsSetIncludePaths(fs, directory, fs.includePaths, variables);
+        // Assign a unique index to each file path. If the file path already exists in the map,
+        // increment the index to handle duplicate file entries.
+        fs.fileIndex = fileIndex[path]++;
         fileSettings.push_back(std::move(fs));
     }
 
@@ -576,9 +593,9 @@ namespace {
 
             // TODO: improve evaluation
             const Settings s;
-            TokenList tokenlist(&s);
+            TokenList tokenlist(s, Standards::Language::C);
             std::istringstream istr(c);
-            tokenlist.createTokens(istr, Standards::Language::C); // TODO: check result
+            tokenlist.createTokens(istr); // TODO: check result
             // TODO: put in a helper
             // generate links
             {
@@ -832,7 +849,7 @@ bool ImportProject::importVcxproj(const std::string &filename, std::map<std::str
                     continue;
             }
 
-            FileSettings fs{cfilename};
+            FileSettings fs{cfilename, Standards::Language::None, 0}; // file will be identified later on
             fs.cfg = p.name;
             // TODO: detect actual MSC version
             fs.msc = true;
@@ -1194,7 +1211,8 @@ bool ImportProject::importBcb6Prj(const std::string &projectFilename)
         //
         // We can also force C++ compilation for all files using the -P command line switch.
         const bool cppMode = forceCppMode || Path::getFilenameExtensionInLowerCase(c) == ".cpp";
-        FileSettings fs{Path::simplifyPath(Path::isAbsolute(c) ? c : projectDir + c)};
+        // TODO: needs to set language and ignore later identification and language enforcement
+        FileSettings fs{Path::simplifyPath(Path::isAbsolute(c) ? c : projectDir + c), Standards::Language::None, 0}; // file will be identified later on
         fsSetIncludePaths(fs, projectDir, toStringList(includePath), variables);
         fsSetDefines(fs, cppMode ? cppDefines : defines);
         fileSettings.push_back(std::move(fs));
@@ -1262,8 +1280,6 @@ bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &setti
     // default to --check-level=normal for import for now
     temp.setCheckLevel(Settings::CheckLevel::normal);
 
-    guiProject.analyzeAllVsConfigs.clear();
-
     // TODO: this should support all available command-line options
     for (const tinyxml2::XMLElement *node = rootnode->FirstChildElement(); node; node = node->NextSiblingElement()) {
         const char* name = node->Name();
@@ -1308,7 +1324,7 @@ bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &setti
                 s.fileName = empty_if_null(child->Attribute("fileName"));
                 if (!s.fileName.empty())
                     s.fileName = joinRelativePath(path, s.fileName);
-                s.lineNumber = child->IntAttribute("lineNumber", SuppressionList::Suppression::NO_LINE);
+                s.lineNumber = child->IntAttribute("lineNumber", SuppressionList::Suppression::NO_LINE); // TODO: should not depend on Suppression
                 s.symbolName = empty_if_null(child->Attribute("symbolName"));
                 s.hash = strToInt<std::size_t>(default_if_null(child->Attribute("hash"), "0"));
                 suppressions.push_back(std::move(s));
@@ -1318,7 +1334,7 @@ bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &setti
         else if (strcmp(name, CppcheckXml::PlatformElementName) == 0)
             guiProject.platform = empty_if_null(node->GetText());
         else if (strcmp(name, CppcheckXml::AnalyzeAllVsConfigsElementName) == 0)
-            guiProject.analyzeAllVsConfigs = empty_if_null(node->GetText());
+            temp.analyzeAllVsConfigs = std::string(empty_if_null(node->GetText())) != "false";
         else if (strcmp(name, CppcheckXml::Parser) == 0)
             temp.clang = true;
         else if (strcmp(name, CppcheckXml::AddonsElementName) == 0) {
@@ -1399,6 +1415,7 @@ bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &setti
     settings.addons = temp.addons;
     settings.clang = temp.clang;
     settings.clangTidy = temp.clangTidy;
+    settings.analyzeAllVsConfigs = temp.analyzeAllVsConfigs;
 
     if (!settings.premiumArgs.empty())
         settings.premiumArgs += temp.premiumArgs;
@@ -1483,7 +1500,7 @@ void ImportProject::setRelativePaths(const std::string &filename)
         return;
     const std::vector<std::string> basePaths{Path::fromNativeSeparators(Path::getCurrentPath())};
     for (auto &fs: fileSettings) {
-        fs.file = FileWithDetails{Path::getRelativePath(fs.filename(), basePaths)};
+        fs.file = FileWithDetails{Path::getRelativePath(fs.filename(), basePaths), Standards::Language::None, 0}; // file will be identified later on
         for (auto &includePath: fs.includePaths)
             includePath = Path::getRelativePath(includePath, basePaths);
     }

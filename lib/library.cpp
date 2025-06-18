@@ -22,6 +22,7 @@
 #include "errortypes.h"
 #include "mathlib.h"
 #include "path.h"
+#include "settings.h"
 #include "symboldatabase.h"
 #include "token.h"
 #include "tokenlist.h"
@@ -175,10 +176,10 @@ static std::vector<std::string> getnames(const char *names)
     return ret;
 }
 
-static void gettokenlistfromvalid(const std::string& valid, bool cpp, TokenList& tokenList)
+static void gettokenlistfromvalid(const std::string& valid, TokenList& tokenList)
 {
     std::istringstream istr(valid + ',');
-    tokenList.createTokens(istr, cpp ? Standards::Language::CPP : Standards::Language::C); // TODO: check result?
+    tokenList.createTokens(istr); // TODO: check result?
     for (Token *tok = tokenList.front(); tok; tok = tok->next()) {
         if (Token::Match(tok,"- %num%")) {
             tok->str("-" + tok->strAt(1));
@@ -195,24 +196,20 @@ Library::Error Library::load(const char exename[], const char path[], bool debug
 
     const bool is_abs_path = Path::isAbsolute(path);
 
+    std::string fullfilename(path);
+
+    // TODO: what if the extension is not .cfg?
+    // only append extension when we provide the library name and not a path - TODO: handle relative paths?
+    if (!is_abs_path && Path::getFilenameExtension(fullfilename).empty())
+        fullfilename += ".cfg";
+
     std::string absolute_path;
     // open file..
     tinyxml2::XMLDocument doc;
     if (debug)
-        std::cout << "looking for library '" + std::string(path) + "'" << std::endl;
-    tinyxml2::XMLError error = xml_LoadFile(doc, path);
+        std::cout << "looking for library '" + fullfilename + "'" << std::endl;
+    tinyxml2::XMLError error = xml_LoadFile(doc, fullfilename.c_str());
     if (error == tinyxml2::XML_ERROR_FILE_NOT_FOUND) {
-        // failed to open file.. is there no extension?
-        std::string fullfilename(path);
-        if (Path::getFilenameExtension(fullfilename).empty()) {
-            fullfilename += ".cfg";
-            if (debug)
-                std::cout << "looking for library '" + fullfilename + "'" << std::endl;
-            error = xml_LoadFile(doc, fullfilename.c_str());
-            if (error != tinyxml2::XML_ERROR_FILE_NOT_FOUND)
-                absolute_path = Path::getAbsoluteFilePath(fullfilename);
-        }
-
         // only perform further lookups when the given path was not absolute
         if (!is_abs_path && error == tinyxml2::XML_ERROR_FILE_NOT_FOUND)
         {
@@ -221,9 +218,9 @@ Library::Error Library::load(const char exename[], const char path[], bool debug
             cfgfolders.emplace_back(FILESDIR "/cfg");
     #endif
             if (exename) {
-                const std::string exepath(Path::fromNativeSeparators(Path::getPathFromFilename(Path::getCurrentExecutablePath(exename))));
+                std::string exepath(Path::fromNativeSeparators(Path::getPathFromFilename(Path::getCurrentExecutablePath(exename))));
                 cfgfolders.push_back(exepath + "cfg");
-                cfgfolders.push_back(exepath);
+                cfgfolders.push_back(std::move(exepath));
             }
 
             while (error == tinyxml2::XML_ERROR_FILE_NOT_FOUND && !cfgfolders.empty()) {
@@ -239,7 +236,7 @@ Library::Error Library::load(const char exename[], const char path[], bool debug
             }
         }
     } else
-        absolute_path = Path::getAbsoluteFilePath(path);
+        absolute_path = Path::getAbsoluteFilePath(fullfilename);
 
     if (error == tinyxml2::XML_SUCCESS) {
         if (mData->mFiles.find(absolute_path) == mData->mFiles.end()) {
@@ -369,6 +366,7 @@ Library::Error Library::load(const tinyxml2::XMLDocument &doc)
                     AllocFunc temp;
                     temp.groupId = allocationId;
 
+                    temp.noFail = memorynode->BoolAttribute("no-fail", false);
                     temp.initData = memorynode->BoolAttribute("init", true);
                     temp.arg = memorynode->IntAttribute("arg", -1);
 
@@ -939,7 +937,7 @@ Library::Error Library::loadFunction(const tinyxml2::XMLElement * const node, co
                         const char *argattr = argnode->Attribute("arg");
                         if (!argattr)
                             return Error(ErrorCode::MISSING_ATTRIBUTE, "arg");
-                        if (strlen(argattr) != 1 || argattr[0]<'0' || argattr[0]>'9')
+                        if (strlen(argattr) != 1 || argattr[0]<'0' || argattr[0]> '9')
                             return Error(ErrorCode::BAD_ATTRIBUTE_VALUE, argattr);
 
                         ac.minsizes.reserve(type == ArgumentChecks::MinSize::Type::MUL ? 2 : 1);
@@ -948,7 +946,7 @@ Library::Error Library::loadFunction(const tinyxml2::XMLElement * const node, co
                             const char *arg2attr = argnode->Attribute("arg2");
                             if (!arg2attr)
                                 return Error(ErrorCode::MISSING_ATTRIBUTE, "arg2");
-                            if (strlen(arg2attr) != 1 || arg2attr[0]<'0' || arg2attr[0]>'9')
+                            if (strlen(arg2attr) != 1 || arg2attr[0]<'0' || arg2attr[0]> '9')
                                 return Error(ErrorCode::BAD_ATTRIBUTE_VALUE, arg2attr);
                             ac.minsizes.back().arg2 = arg2attr[0] - '0';
                         }
@@ -1054,15 +1052,15 @@ Library::Error Library::loadFunction(const tinyxml2::XMLElement * const node, co
     return Error(ErrorCode::OK);
 }
 
-bool Library::isIntArgValid(const Token *ftok, int argnr, const MathLib::bigint argvalue) const
+bool Library::isIntArgValid(const Token *ftok, int argnr, const MathLib::bigint argvalue, const Settings& settings) const
 {
     const ArgumentChecks *ac = getarg(ftok, argnr);
     if (!ac || ac->valid.empty())
         return true;
     if (ac->valid.find('.') != std::string::npos)
-        return isFloatArgValid(ftok, argnr, static_cast<double>(argvalue));
-    TokenList tokenList(nullptr);
-    gettokenlistfromvalid(ac->valid, ftok->isCpp(), tokenList);
+        return isFloatArgValid(ftok, argnr, static_cast<double>(argvalue), settings);
+    TokenList tokenList(settings, ftok->isCpp() ? Standards::Language::CPP : Standards::Language::C);
+    gettokenlistfromvalid(ac->valid, tokenList);
     for (const Token *tok = tokenList.front(); tok; tok = tok->next()) {
         if (tok->isNumber() && argvalue == MathLib::toBigNumber(tok))
             return true;
@@ -1076,13 +1074,13 @@ bool Library::isIntArgValid(const Token *ftok, int argnr, const MathLib::bigint 
     return false;
 }
 
-bool Library::isFloatArgValid(const Token *ftok, int argnr, double argvalue) const
+bool Library::isFloatArgValid(const Token *ftok, int argnr, double argvalue, const Settings& settings) const
 {
     const ArgumentChecks *ac = getarg(ftok, argnr);
     if (!ac || ac->valid.empty())
         return true;
-    TokenList tokenList(nullptr);
-    gettokenlistfromvalid(ac->valid, ftok->isCpp(), tokenList);
+    TokenList tokenList(settings, ftok->isCpp() ? Standards::Language::CPP : Standards::Language::C);
+    gettokenlistfromvalid(ac->valid, tokenList);
     for (const Token *tok = tokenList.front(); tok; tok = tok->next()) {
         if (Token::Match(tok, "%num% : %num%") && argvalue >= MathLib::toDoubleNumber(tok) && argvalue <= MathLib::toDoubleNumber(tok->tokAt(2)))
             return true;

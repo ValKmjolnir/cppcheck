@@ -36,6 +36,7 @@
 #include <vector>
 
 class Token;
+class Settings; // TODO: remove dependency on settings
 enum class Severity : std::uint8_t;
 
 namespace tinyxml2 {
@@ -88,6 +89,7 @@ public:
         int bufferSizeArg2{};
         int reallocArg{};
         bool initData{};
+        bool noFail{};
     };
 
     /** get allocation info for function */
@@ -345,8 +347,8 @@ public:
         return arg && arg->strz;
     }
 
-    bool isIntArgValid(const Token *ftok, int argnr, MathLib::bigint argvalue) const;
-    bool isFloatArgValid(const Token *ftok, int argnr, double argvalue) const;
+    bool isIntArgValid(const Token *ftok, int argnr, MathLib::bigint argvalue, const Settings& settings) const;
+    bool isFloatArgValid(const Token *ftok, int argnr, double argvalue, const Settings& settings) const;
 
     const std::string& validarg(const Token *ftok, int argnr) const {
         const ArgumentChecks *arg = getarg(ftok, argnr);

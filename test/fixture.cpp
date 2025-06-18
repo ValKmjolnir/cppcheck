@@ -169,6 +169,7 @@ void TestFixture::assert_(const char * const filename, const unsigned int linenr
         errmsg << getLocationStr(filename, linenr) << ": Assertion failed." << std::endl << "_____" << std::endl;
         if (!msg.empty())
             errmsg << "Hint:" << std::endl << msg << std::endl;
+        throw AssertFailedError();
     }
 }
 
@@ -183,6 +184,7 @@ void TestFixture::assertFailure(const char* const filename, const unsigned int l
     if (!msg.empty())
         errmsg << "Hint:" << std::endl << msg << std::endl;
     errmsg << "_____" << std::endl;
+    throw AssertFailedError();
 }
 
 void TestFixture::assertEquals(const char * const filename, const unsigned int linenr, const std::string &expected, const std::string &actual, const std::string &msg) const
@@ -289,6 +291,7 @@ void TestFixture::assertThrow(const char * const filename, const unsigned int li
     ++fails_counter;
     errmsg << getLocationStr(filename, linenr) << ": Assertion succeeded. "
            << "The expected exception was thrown" << std::endl << "_____" << std::endl;
+    throw AssertFailedError();
 }
 
 void TestFixture::assertThrowFail(const char * const filename, const unsigned int linenr) const
@@ -296,17 +299,19 @@ void TestFixture::assertThrowFail(const char * const filename, const unsigned in
     ++fails_counter;
     errmsg << getLocationStr(filename, linenr) << ": Assertion failed. "
            << "The expected exception was not thrown"  << std::endl << "_____" << std::endl;
+    throw AssertFailedError();
 }
 
-void TestFixture::assertNoThrowFail(const char * const filename, const unsigned int linenr) const
+void TestFixture::assertNoThrowFail(const char * const filename, const unsigned int linenr, bool bailout) const
 {
-    ++fails_counter;
-
     std::string ex_msg;
 
     try {
         // cppcheck-suppress rethrowNoCurrentException
         throw;
+    }
+    catch (const AssertFailedError&) {
+        return;
     }
     catch (const InternalError& e) {
         ex_msg = e.errorMessage;
@@ -318,8 +323,11 @@ void TestFixture::assertNoThrowFail(const char * const filename, const unsigned 
         ex_msg = "unknown exception";
     }
 
+    ++fails_counter;
     errmsg << getLocationStr(filename, linenr) << ": Assertion failed. "
            << "Unexpected exception was thrown: " << ex_msg << std::endl << "_____" << std::endl;
+    if (bailout)
+        throw AssertFailedError();
 }
 
 void TestFixture::printHelp()
@@ -435,8 +443,7 @@ void TestFixture::reportErr(const ErrorMessage &msg)
     }
     else {
         if (!msg.callStack.empty()) {
-            // TODO: add column
-            errormessage += ErrorLogger::callStackToString(msg.callStack);
+            errormessage += ErrorLogger::callStackToString(msg.callStack, mNewTemplate);
             errormessage += ": ";
         }
         if (msg.severity != Severity::none) {
@@ -447,7 +454,11 @@ void TestFixture::reportErr(const ErrorMessage &msg)
             errormessage += ") ";
         }
         errormessage += msg.shortMessage();
-        // TODO: add ID
+        if (mNewTemplate) {
+            errormessage += " [";
+            errormessage += msg.id;
+            errormessage += "]";
+        }
     }
     mErrout << errormessage << std::endl;
 }
@@ -455,8 +466,8 @@ void TestFixture::reportErr(const ErrorMessage &msg)
 void TestFixture::setTemplateFormat(const std::string &templateFormat)
 {
     if (templateFormat == "multiline") {
-        mTemplateFormat = "{file}:{line}:{severity}:{message}";
-        mTemplateLocation = "{file}:{line}:note:{info}";
+        mTemplateFormat = "[{file}:{line}:{column}]: {severity}:{inconclusive:inconclusive:} {message} [{id}]";
+        mTemplateLocation = "[{file}:{line}:{column}]: note: {info}";
     }
     else if (templateFormat == "simple") { // TODO: use the existing one in CmdLineParser
         mTemplateFormat = "{file}:{line}:{column}: {severity}:{inconclusive:inconclusive:} {message} [{id}]";

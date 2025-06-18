@@ -66,6 +66,11 @@ public:
         mErrorLogger.reportErr(msg);
     }
 
+    void reportMetric(const std::string &metric) override {
+        std::lock_guard<std::mutex> lg(mReportSync);
+        mErrorLogger.reportMetric(metric);
+    }
+
     void reportStatus(std::size_t fileindex, std::size_t filecount, std::size_t sizedone, std::size_t sizetotal) {
         std::lock_guard<std::mutex> lg(mReportSync);
         mThreadExecutor.reportStatus(fileindex, filecount, sizedone, sizetotal);
@@ -119,12 +124,9 @@ public:
         if (fs) {
             // file settings..
             result = fileChecker.check(*fs);
-            if (mSettings.clangTidy)
-                fileChecker.analyseClangTidy(*fs);
         } else {
             // Read file from a file
             result = fileChecker.check(*file);
-            // TODO: call analyseClangTidy()?
         }
         for (const auto& suppr : mSuppressions.nomsg.getSuppressions()) {
             // need to transfer all inline suppressions because these are used later on

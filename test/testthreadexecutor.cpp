@@ -132,6 +132,7 @@ private:
     }
 
     void run() override {
+        mNewTemplate = true;
         TEST_CASE(deadlock_with_many_errors);
         TEST_CASE(many_threads);
         TEST_CASE(many_threads_showtime);
@@ -235,7 +236,7 @@ private:
               "  {int i = *((int*)0);}\n"
               "  return 0;\n"
               "}");
-        ASSERT_EQUALS("[" + fprefix() + "_1.cpp:3]: (error) Null pointer dereference: (int*)0\n", errout_str());
+        ASSERT_EQUALS("[" + fprefix() + "_1.cpp:3:14]: (error) Null pointer dereference: (int*)0 [nullPointer]\n", errout_str());
     }
 
     void one_error_several_files() {
@@ -339,7 +340,7 @@ private:
 
     void suppress_error_library() {
         SUPPRESS;
-        const Settings settingsOld = settings;
+        const Settings settingsOld = settings; // TODO: get rid of this
         const char xmldata[] = R"(<def format="2"><markup ext=".cpp" reporterrors="false"/></def>)";
         settings = settingsBuilder().libraryxml(xmldata).build();
         check(2, 1, 0,
@@ -362,7 +363,7 @@ private:
         check(2, 2, 2,
               "#include \"" + inc_h.name() +"\"");
         // this is made unique by the executor
-        ASSERT_EQUALS("[" + inc_h.name() + ":3]: (error) Null pointer dereference: (int*)0\n", errout_str());
+        ASSERT_EQUALS("[" + inc_h.name() + ":3:11]: (error) Null pointer dereference: (int*)0 [nullPointer]\n", errout_str());
     }
 
     // TODO: test whole program analysis

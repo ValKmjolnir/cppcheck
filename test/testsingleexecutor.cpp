@@ -136,6 +136,7 @@ private:
     }
 
     void run() override {
+        mNewTemplate = true;
         TEST_CASE(many_files);
         TEST_CASE(many_files_showtime);
         TEST_CASE(many_files_plist);
@@ -174,7 +175,7 @@ private:
         {
             std::string expected;
             for (int i = 1; i <= num_files; ++i) {
-                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3]: (error) Null pointer dereference: (int*)0\n";
+                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3:13]: (error) Null pointer dereference: (int*)0 [nullPointer]\n";
             }
             ASSERT_EQUALS(expected, errout_str());
         }
@@ -237,7 +238,7 @@ private:
               "  {int i = *((int*)0);}\n"
               "  return 0;\n"
               "}");
-        ASSERT_EQUALS("[" + fprefix() + "_" + zpad3(1) + ".cpp:3]: (error) Null pointer dereference: (int*)0\n", errout_str());
+        ASSERT_EQUALS("[" + fprefix() + "_" + zpad3(1) + ".cpp:3:14]: (error) Null pointer dereference: (int*)0 [nullPointer]\n", errout_str());
     }
 
     void one_error_several_files() {
@@ -251,7 +252,7 @@ private:
         {
             std::string expected;
             for (int i = 1; i <= num_files; ++i) {
-                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3]: (error) Null pointer dereference: (int*)0\n";
+                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3:14]: (error) Null pointer dereference: (int*)0 [nullPointer]\n";
             }
             ASSERT_EQUALS(expected, errout_str());
         }
@@ -345,7 +346,7 @@ private:
 
     void suppress_error_library() {
         SUPPRESS;
-        const Settings settingsOld = settings;
+        const Settings settingsOld = settings; // TODO: get rid of this
         const char xmldata[] = R"(<def format="2"><markup ext=".cpp" reporterrors="false"/></def>)";
         settings = settingsBuilder().libraryxml(xmldata).build();
         check(1, 0,
@@ -369,8 +370,8 @@ private:
               "#include \"" + inc_h.name() + "\"");
         // these are not actually made unique by the implementation. That needs to be done by the given ErrorLogger
         ASSERT_EQUALS(
-            "[" + inc_h.name() + ":3]: (error) Null pointer dereference: (int*)0\n"
-            "[" + inc_h.name() + ":3]: (error) Null pointer dereference: (int*)0\n",
+            "[" + inc_h.name() + ":3:11]: (error) Null pointer dereference: (int*)0 [nullPointer]\n"
+            "[" + inc_h.name() + ":3:11]: (error) Null pointer dereference: (int*)0 [nullPointer]\n",
             errout_str());
     }
 

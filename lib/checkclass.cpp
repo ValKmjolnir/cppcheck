@@ -172,17 +172,6 @@ void CheckClass::constructors()
         if (!printWarnings)
             continue;
 
-        // #3196 => bailout if there are nested unions
-        // TODO: handle union variables better
-        {
-            const bool bailout = std::any_of(scope->nestedList.cbegin(), scope->nestedList.cend(), [](const Scope* nestedScope) {
-                return nestedScope->type == ScopeType::eUnion;
-            });
-            if (bailout)
-                continue;
-        }
-
-
         std::vector<Usage> usageList = createUsageList(scope);
 
         for (const Function &func : scope->functionList) {
@@ -310,26 +299,29 @@ void CheckClass::constructors()
                     // If constructor is not in scope then we maybe using a constructor from a different template specialization
                     if (!precedes(scope->bodyStart, func.tokenDef))
                         continue;
-                    const Scope *varType = var.typeScope();
-                    if (!varType || varType->type != ScopeType::eUnion) {
-                        const bool derived = scope != var.scope();
-                        if (func.type == FunctionType::eConstructor &&
-                            func.nestedIn && (func.nestedIn->numConstructors - func.nestedIn->numCopyOrMoveConstructors) > 1 &&
-                            func.argCount() == 0 && func.functionScope &&
-                            func.arg && func.arg->link()->next() == func.functionScope->bodyStart &&
-                            func.functionScope->bodyStart->link() == func.functionScope->bodyStart->next()) {
-                            // don't warn about user defined default constructor when there are other constructors
-                            if (printInconclusive)
-                                uninitVarError(func.token, func.access == AccessControl::Private, func.type, var.scope()->className, var.name(), derived, true);
-                        } else if (missingCopy)
-                            missingMemberCopyError(func.token, func.type, var.scope()->className, var.name());
-                        else
-                            uninitVarError(func.token, func.access == AccessControl::Private, func.type, var.scope()->className, var.name(), derived, false);
-                    }
+
+                    const bool derived = scope != var.scope();
+                    if (func.type == FunctionType::eConstructor &&
+                        func.nestedIn && (func.nestedIn->numConstructors - func.nestedIn->numCopyOrMoveConstructors) > 1 &&
+                        func.argCount() == 0 && func.functionScope &&
+                        func.arg && func.arg->link()->next() == func.functionScope->bodyStart &&
+                        func.functionScope->bodyStart->link() == func.functionScope->bodyStart->next()) {
+                        // don't warn about user defined default constructor when there are other constructors
+                        if (printInconclusive)
+                            uninitVarError(func.token, func.access == AccessControl::Private, func.type, var.scope()->className, var.name(), derived, true);
+                    } else if (missingCopy)
+                        missingMemberCopyError(func.token, func.type, var.scope()->className, var.name());
+                    else
+                        uninitVarError(func.token, func.access == AccessControl::Private, func.type, var.scope()->className, var.name(), derived, false);
                 }
             }
         }
     }
+}
+
+static bool isPermissibleConversion(const std::string& type)
+{
+    return type == "std::initializer_list" || type == "std::nullptr_t";
 }
 
 void CheckClass::checkExplicitConstructors()
@@ -370,7 +362,7 @@ void CheckClass::checkExplicitConstructors()
                 func.type != FunctionType::eCopyConstructor &&
                 func.type != FunctionType::eMoveConstructor &&
                 !(func.templateDef && Token::simpleMatch(func.argumentList.front().typeEndToken(), "...")) &&
-                func.argumentList.front().getTypeName() != "std::initializer_list") {
+                !isPermissibleConversion(func.argumentList.front().getTypeName())) {
                 noExplicitConstructorError(func.tokenDef, scope->className, scope->type == ScopeType::eStruct);
             }
         }
@@ -1249,7 +1241,8 @@ static bool checkFunctionUsage(const Function *privfunc, const Scope* scope)
                     return true;
             }
         } else if ((func->type != FunctionType::eCopyConstructor &&
-                    func->type != FunctionType::eOperatorEqual) ||
+                    func->type != FunctionType::eOperatorEqual &&
+                    !func->isDefault() && !func->isDelete()) ||
                    func->access != AccessControl::Private) // Assume it is used, if a function implementation isn't seen, but empty private copy constructors and assignment operators are OK
             return true;
     }
@@ -1325,16 +1318,19 @@ void CheckClass::privateFunctions()
             }
 
             if (!used)
-                unusedPrivateFunctionError(pf->tokenDef, scope->className, pf->name());
+                unusedPrivateFunctionError(pf->token, pf->tokenDef, scope->className, pf->name());
 
             privateFuncs.pop_front();
         }
     }
 }
 
-void CheckClass::unusedPrivateFunctionError(const Token *tok, const std::string &classname, const std::string &funcname)
+void CheckClass::unusedPrivateFunctionError(const Token* tok1, const Token *tok2, const std::string &classname, const std::string &funcname)
 {
-    reportError(tok, Severity::style, "unusedPrivateFunction", "$symbol:" + classname + "::" + funcname + "\nUnused private function: '$symbol'", CWE398, Certainty::normal);
+    std::list<const Token *> toks{ tok1 };
+    if (tok2)
+        toks.push_front(tok2);
+    reportError(toks, Severity::style, "unusedPrivateFunction", "$symbol:" + classname + "::" + funcname + "\nUnused private function: '$symbol'", CWE398, Certainty::normal);
 }
 
 //---------------------------------------------------------------------------
@@ -1429,8 +1425,7 @@ void CheckClass::checkMemset()
                     type = typeTok->type()->classScope;
 
                 if (type) {
-                    const std::set<const Scope *> parsedTypes;
-                    checkMemsetType(scope, tok, type, false, parsedTypes);
+                    checkMemsetType(scope, tok, type, false, {});
                 }
             } else if (tok->variable() && tok->variable()->isPointer() && tok->variable()->typeScope() && Token::Match(tok, "%var% = %name% (")) {
                 const Library::AllocFunc* alloc = mSettings->library.getAllocFuncInfo(tok->tokAt(2));
@@ -2642,7 +2637,7 @@ void CheckClass::checkConstError2(const Token *tok1, const Token *tok2, const st
 {
     std::list<const Token *> toks{ tok1 };
     if (tok2)
-        toks.push_back(tok2);
+        toks.push_front(tok2);
     if (!suggestStatic) {
         const std::string msg = foundAllBaseClasses ?
                                 "Technically the member function '$symbol' can be const.\nThe member function '$symbol' can be made a const " :
@@ -3390,6 +3385,8 @@ void CheckClass::checkReturnByReference()
                 continue;
             if (func.isOperator())
                 continue;
+            if (func.functionPointerUsage)
+                continue;
             if (const Library::Container* container = mSettings->library.detectContainer(func.retDef))
                 if (container->view)
                     continue;
@@ -3405,7 +3402,9 @@ void CheckClass::checkReturnByReference()
                 const bool isView = isContainer && var->valueType()->container->view;
                 bool warn = isContainer && !isView;
                 if (!warn && !isView) {
-                    const std::size_t size = ValueFlow::getSizeOf(*var->valueType(), *mSettings);
+                    const std::size_t size = ValueFlow::getSizeOf(*var->valueType(),
+                                                                  *mSettings,
+                                                                  ValueFlow::Accuracy::LowerBound);
                     if (size > 2 * mSettings->platform.sizeof_pointer)
                         warn = true;
                 }
@@ -3796,7 +3795,7 @@ void CheckClass::getErrorMessages(ErrorLogger *errorLogger, const Settings *sett
     c.uninitVarError(nullptr, true, FunctionType::eConstructor, "classname", "varnamepriv", true, false);
     c.missingMemberCopyError(nullptr, FunctionType::eConstructor, "classname", "varnamepriv");
     c.operatorEqVarError(nullptr, "classname", "", false);
-    c.unusedPrivateFunctionError(nullptr, "classname", "funcname");
+    c.unusedPrivateFunctionError(nullptr, nullptr, "classname", "funcname");
     c.memsetError(nullptr, "memfunc", "classname", "class");
     c.memsetErrorReference(nullptr, "memfunc", "class");
     c.memsetErrorFloat(nullptr, "class");

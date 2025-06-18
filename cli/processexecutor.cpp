@@ -78,7 +78,7 @@ ProcessExecutor::ProcessExecutor(const std::list<FileWithDetails> &files, const 
 namespace {
     class PipeWriter : public ErrorLogger {
     public:
-        enum PipeSignal : std::uint8_t {REPORT_OUT='1',REPORT_ERROR='2',REPORT_SUPPR_INLINE='3',CHILD_END='5'};
+        enum PipeSignal : std::uint8_t {REPORT_OUT='1',REPORT_ERROR='2',REPORT_SUPPR_INLINE='3',REPORT_SUPPR='4',CHILD_END='5',REPORT_METRIC='6'};
 
         explicit PipeWriter(int pipe) : mWpipe(pipe) {}
 
@@ -93,12 +93,15 @@ namespace {
         void writeSuppr(const SuppressionList &supprs) const {
             for (const auto& suppr : supprs.getSuppressions())
             {
-                if (!suppr.isInline)
-                    continue;
-
-                writeToPipe(REPORT_SUPPR_INLINE, suppressionToString(suppr));
+                if (suppr.isInline)
+                    writeToPipe(REPORT_SUPPR_INLINE, suppressionToString(suppr));
+                else if (suppr.checked)
+                    writeToPipe(REPORT_SUPPR, suppressionToString(suppr));
             }
-            // TODO: update suppression states?
+        }
+
+        void reportMetric(const std::string &metric) override {
+            writeToPipe(REPORT_METRIC, metric);
         }
 
         void writeEnd(const std::string& str) const {
@@ -179,7 +182,9 @@ bool ProcessExecutor::handleRead(int rpipe, unsigned int &result, const std::str
     if (type != PipeWriter::REPORT_OUT &&
         type != PipeWriter::REPORT_ERROR &&
         type != PipeWriter::REPORT_SUPPR_INLINE &&
-        type != PipeWriter::CHILD_END) {
+        type != PipeWriter::REPORT_SUPPR &&
+        type != PipeWriter::CHILD_END &&
+        type != PipeWriter::REPORT_METRIC) {
         std::cerr << "#### ThreadExecutor::handleRead(" << filename << ") invalid type " << int(type) << std::endl;
         std::exit(EXIT_FAILURE);
     }
@@ -230,7 +235,7 @@ bool ProcessExecutor::handleRead(int rpipe, unsigned int &result, const std::str
 
         if (hasToLog(msg))
             mErrorLogger.reportErr(msg);
-    } else if (type == PipeWriter::REPORT_SUPPR_INLINE) {
+    } else if (type == PipeWriter::REPORT_SUPPR_INLINE || type == PipeWriter::REPORT_SUPPR) {
         if (!buf.empty()) {
             // TODO: avoid string splitting
             auto parts = splitString(buf, ';');
@@ -241,7 +246,7 @@ bool ProcessExecutor::handleRead(int rpipe, unsigned int &result, const std::str
                 std::exit(EXIT_FAILURE);
             }
             auto suppr = SuppressionList::parseLine(parts[0]);
-            suppr.isInline = true;
+            suppr.isInline = (type == PipeWriter::REPORT_SUPPR_INLINE);
             suppr.checked = parts[1] == "1";
             suppr.matched = parts[2] == "1";
             const std::string err = mSuppressions.nomsg.addSuppression(suppr);
@@ -256,6 +261,8 @@ bool ProcessExecutor::handleRead(int rpipe, unsigned int &result, const std::str
     } else if (type == PipeWriter::CHILD_END) {
         result += std::stoi(buf);
         res = false;
+    } else if (type == PipeWriter::REPORT_METRIC) {
+        mErrorLogger.reportMetric(buf);
     }
 
     return res;
@@ -336,12 +343,9 @@ unsigned int ProcessExecutor::check()
 
                 if (iFileSettings != mFileSettings.end()) {
                     resultOfCheck = fileChecker.check(*iFileSettings);
-                    if (mSettings.clangTidy)
-                        fileChecker.analyseClangTidy(*iFileSettings);
                 } else {
                     // Read file from a file
                     resultOfCheck = fileChecker.check(*iFile);
-                    // TODO: call analyseClangTidy()?
                 }
 
                 pipewriter.writeSuppr(mSuppressions.nomsg);

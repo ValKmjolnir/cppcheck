@@ -135,7 +135,7 @@ def __test_compile_commands_unused_function(tmpdir, use_j):
     proj_path_sep = os.path.join(__script_dir, 'proj-inline-suppress-unusedFunction') + os.path.sep
     lines = stderr.splitlines()
     assert lines == [
-        "{}B.cpp:6:0: style: The function 'unusedFunctionTest' is never used. [unusedFunction]".format(proj_path_sep)
+        "{}B.cpp:6:9: style: The function 'unusedFunctionTest' is never used. [unusedFunction]".format(proj_path_sep)
     ]
     assert stdout == ''
     assert ret == 1, stdout
@@ -435,6 +435,25 @@ def test_unused_function_disabled_unmatched():
     ret, stdout, stderr = cppcheck(args, cwd=__script_dir)
     assert stderr.splitlines() == [
         '{}unusedFunctionUnmatched.cpp:5:0: information: Unmatched suppression: uninitvar [unmatchedSuppression]'.format(__proj_inline_suppres_path)
+    ]
+    assert stdout == ''
+    assert ret == 0, stdout
+
+
+def test_unmatched_cfg():
+    # make sure we do not report unmatched inline suppressions from inactive code blocks
+    args = [
+        '-q',
+        '--template=simple',
+        '--enable=warning,information',
+        '--inline-suppr',
+        'proj-inline-suppress/cfg.c'
+    ]
+
+    ret, stdout, stderr = cppcheck(args, cwd=__script_dir)
+    assert stderr.splitlines() == [
+        '{}cfg.c:10:0: information: Unmatched suppression: id [unmatchedSuppression]'.format(__proj_inline_suppres_path),
+        '{}cfg.c:14:0: information: Unmatched suppression: id [unmatchedSuppression]'.format(__proj_inline_suppres_path),
     ]
     assert stdout == ''
     assert ret == 0, stdout

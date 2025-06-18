@@ -24,7 +24,6 @@
 #include "settings.h"
 #include "standards.h"
 #include "token.h"
-#include "tokenize.h"
 #include "vfvalue.h"
 
 #include <algorithm>
@@ -55,6 +54,7 @@ private:
                                "</def>";
         settings = settingsBuilder(settings).libraryxml(cfg).build();
 
+        mNewTemplate = true;
         TEST_CASE(valueFlowNumber);
         TEST_CASE(valueFlowString);
         TEST_CASE(valueFlowTypeTraits);
@@ -77,10 +77,14 @@ private:
         TEST_CASE(valueFlowBeforeConditionAssignIncDec);
         TEST_CASE(valueFlowBeforeConditionFunctionCall);
         TEST_CASE(valueFlowBeforeConditionGlobalVariables);
+        mNewTemplate = false;
         TEST_CASE(valueFlowBeforeConditionGoto);
+        mNewTemplate = true;
         TEST_CASE(valueFlowBeforeConditionIfElse);
         TEST_CASE(valueFlowBeforeConditionLoop);
+        mNewTemplate = false;
         TEST_CASE(valueFlowBeforeConditionMacro);
+        mNewTemplate = true;
         TEST_CASE(valueFlowBeforeConditionSizeof);
         TEST_CASE(valueFlowBeforeConditionSwitch);
         TEST_CASE(valueFlowBeforeConditionTernaryOp);
@@ -166,7 +170,9 @@ private:
         TEST_CASE(valueFlowImpossibleUnknownConstant);
         TEST_CASE(valueFlowContainerEqual);
 
+        mNewTemplate = false;
         TEST_CASE(valueFlowBailoutIncompleteVar);
+        mNewTemplate = true;
 
         TEST_CASE(performanceIfCount);
     }
@@ -484,9 +490,7 @@ private:
     void bailout_(const char* file, int line, const char (&code)[size]) {
         const Settings s = settingsBuilder().debugwarnings().build();
 
-        std::vector<std::string> files(1, "test.cpp");
-        Tokenizer tokenizer(s, *this);
-        PreprocessorHelper::preprocess(code, files, tokenizer, *this);
+        SimpleTokenizer2 tokenizer(s, *this, code, "test.cpp");
 
         // Tokenize..
         ASSERT_LOC(tokenizer.simplifyTokens1(""), file, line);
@@ -494,8 +498,8 @@ private:
 
 #define tokenValues(...) tokenValues_(__FILE__, __LINE__, __VA_ARGS__)
     std::list<ValueFlow::Value> tokenValues_(const char* file, int line, const char code[], const char tokstr[], const Settings *s = nullptr, bool cpp = true) {
-        SimpleTokenizer tokenizer(s ? *s : settings, *this);
-        ASSERT_LOC(tokenizer.tokenize(code, cpp), file, line);
+        SimpleTokenizer tokenizer(s ? *s : settings, *this, cpp);
+        ASSERT_LOC(tokenizer.tokenize(code), file, line);
         const Token *tok = Token::findmatch(tokenizer.tokens(), tokstr);
         return tok ? tok->values() : std::list<ValueFlow::Value>();
     }
@@ -570,8 +574,8 @@ private:
         ASSERT_EQUALS(0, valueOfTok("x=false;", "false").intvalue);
         ASSERT_EQUALS(1, valueOfTok("x=true;", "true").intvalue);
         ASSERT_EQUALS(0, valueOfTok("x(NULL);", "NULL").intvalue);
-        ASSERT_EQUALS((int)('a'), valueOfTok("x='a';", "'a'").intvalue);
-        ASSERT_EQUALS((int)('\n'), valueOfTok("x='\\n';", "'\\n'").intvalue);
+        ASSERT_EQUALS(static_cast<int>('a'), valueOfTok("x='a';", "'a'").intvalue);
+        ASSERT_EQUALS(static_cast<int>('\n'), valueOfTok("x='\\n';", "'\\n'").intvalue);
         TODO_ASSERT_EQUALS(0xFFFFFFFF00000000, 0, valueOfTok("x=0xFFFFFFFF00000000;", "0xFFFFFFFF00000000").intvalue); // #7701
         ASSERT_EQUALS_DOUBLE(16, valueOfTok("x=(double)16;", "(").floatValue, 1e-5);
         ASSERT_EQUALS_DOUBLE(0.0625, valueOfTok("x=1/(double)16;", "/").floatValue, 1e-5);
@@ -590,6 +594,8 @@ private:
                                 "void foo() { x = N::e1; }";
             ASSERT_EQUALS(1, valueOfTok(code, "::").intvalue);
         }
+
+        ASSERT_EQUALS(63, valueOfTok("x = 3 * uint32_t{21};", "*").intvalue);
     }
 
     void valueFlowString() {
@@ -934,7 +940,7 @@ private:
                 "    const char *x = \"abcd\";\n"
                 "    return x[0];\n"
                 "}";
-        ASSERT_EQUALS((int)('a'), valueOfTok(code, "[").intvalue);
+        ASSERT_EQUALS(static_cast<int>('a'), valueOfTok(code, "[").intvalue);
 
         code  = "char f() {\n"
                 "    const char *x = \"\";\n"
@@ -1647,6 +1653,27 @@ private:
         ASSERT_EQUALS(1U, values.size());
         ASSERT_EQUALS(12, values.back().intvalue);
 
+        code = "struct X { A a; int b; A c; };\n"
+               "void f() {\n"
+               "    x = sizeof(X);\n"
+               "}";
+        values = tokenValues(code, "( X )");
+        ASSERT_EQUALS(1U, values.size());
+        ASSERT_EQUALS(-1, values.back().intvalue);
+
+        code = "struct X {};\n"
+               "struct SubX : X {};\n"
+               "void f() {\n"
+               "    x = sizeof(X);\n"
+               "    subx = sizeof(SubX);\n"
+               "}";
+        values = tokenValues(code, "( X )");
+        ASSERT_EQUALS(1U, values.size());
+        ASSERT_EQUALS(1, values.back().intvalue);
+        values = tokenValues(code, "( SubX )");
+        ASSERT_EQUALS(1U, values.size());
+        ASSERT_EQUALS(1, values.back().intvalue);
+
         code = "struct T;\n"
                "struct S { T& r; };\n"
                "struct T { S s{ *this }; };\n"
@@ -1894,7 +1921,7 @@ private:
                 "    if (x == 123) {}\n"
                 "}");
         ASSERT_EQUALS(
-            "[test.cpp:2]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable y\n",
+            "[test.cpp:2:9]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable y [valueFlowBailoutIncompleteVar]\n",
             errout_str());
     }
 
@@ -2035,7 +2062,7 @@ private:
                 "    y = ((x<0) ? x : ((x==2)?3:4));\n"
                 "}");
         ASSERT_EQUALS(
-            "[test.cpp:2]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable y\n",
+            "[test.cpp:2:5]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable y [valueFlowBailoutIncompleteVar]\n",
             errout_str());
 
         bailout("int f(int x) {\n"
@@ -2100,7 +2127,7 @@ private:
                 "    if (x == 123) {}\n"
                 "}");
         ASSERT_EQUALS(
-            "[test.cpp:2]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable b\n",
+            "[test.cpp:2:21]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable b [valueFlowBailoutIncompleteVar]\n",
             errout_str());
 
         code = "void f(int x, bool abc) {\n"
@@ -2149,7 +2176,7 @@ private:
                 "    };\n"
                 "}");
         ASSERT_EQUALS(
-            "[test.cpp:3]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable a\n",
+            "[test.cpp:3:13]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable a [valueFlowBailoutIncompleteVar]\n",
             errout_str());
 
         bailout("void f(int x, int y) {\n"
@@ -2159,7 +2186,7 @@ private:
                 "    };\n"
                 "}");
         ASSERT_EQUALS(
-            "[test.cpp:3]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable a\n",
+            "[test.cpp:3:13]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable a [valueFlowBailoutIncompleteVar]\n",
             errout_str());
     }
 
@@ -3680,6 +3707,13 @@ private:
                "}\n";
         ASSERT_EQUALS(false, testValueOfXKnown(code, 9U, 0));
         ASSERT_EQUALS(true, testValueOfX(code, 9U, 0));
+
+        code = "int f(int a, int b) {\n"
+               "    if (a > 0 && b > 0) {}\n"
+               "    int x = a * b;\n"
+               "    return x;\n"
+               "}\n";
+        ASSERT_EQUALS(true, testValueOfX(code, 4U, 0));
     }
 
     void valueFlowAfterConditionTernary()
@@ -3884,7 +3918,7 @@ private:
                "    x += 67;\n"
                "    return x;\n"
                "}";
-        ASSERT_EQUALS(true, testValueOfX(code, 4U, (double)123.45f + 67, 0.01));
+        ASSERT_EQUALS(true, testValueOfX(code, 4U, static_cast<double>(123.45f) + 67, 0.01));
 
         code = "double f() {\n"
                "    double x = 123.45;\n"
@@ -6374,6 +6408,14 @@ private:
                "    return false;\n"
                "}\n";
         ASSERT_EQUALS(true, testValueOfXKnown(code, 6U, 0));
+
+        code = "bool f(bool b1, bool b2) {\n"
+               "    if (b1 && b2)\n"
+               "        return;\n"
+               "    int x = b1 && b2;\n"
+               "    return x;\n"
+               "}\n";
+        ASSERT_EQUALS(true, testValueOfXKnown(code, 5U, 0));
     }
 
     static std::string isPossibleContainerSizeValue(std::list<ValueFlow::Value> values,
@@ -7351,7 +7393,7 @@ private:
     void valueFlowDynamicBufferSize() {
         const char *code;
 
-        const Settings settingsOld = settings;
+        const Settings settingsOld = settings; // TODO: get rid of this
         settings = settingsBuilder(settings).library("posix.cfg").library("bsd.cfg").build();
 
         code = "void* f() {\n"

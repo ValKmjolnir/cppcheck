@@ -26,8 +26,8 @@ jobs:
   build_qt:
     strategy:
       matrix:
-        os: [windows-2019, windows-2022]
-        qt_ver: [5.15.2, 6.8.2]
+        os: [windows-2022, windows-2025]
+        qt_ver: [5.15.2, 6.9.0]
       fail-fast: false
 
     runs-on: ${{ matrix.os }}
@@ -47,7 +47,9 @@ jobs:
         with:
           version: ${{ matrix.qt_ver }}
           modules: 'qtcharts'
+          setup-python: 'false'
           cache: true
+          aqtversion: '==3.1.*'  # TODO: remove when aqtinstall 3.2.2 is available
 
       - name: Run CMake for GUI release (Qt 5)
         if: startsWith(matrix.qt_ver, '5')
@@ -82,7 +84,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [windows-2019, windows-2022]
+        os: [windows-2022, windows-2025]
         config: [debug, release]
       fail-fast: false
 

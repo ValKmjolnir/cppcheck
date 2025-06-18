@@ -26,6 +26,7 @@
 #include <list>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 
@@ -139,7 +140,8 @@ private:
 
     std::string parse(const char clang[]) {
         const Settings settings = settingsBuilder().clang().build();
-        Tokenizer tokenizer(settings, *this);
+        TokenList tokenlist{settings, Standards::Language::CPP};
+        Tokenizer tokenizer(std::move(tokenlist), *this);
         std::istringstream istr(clang);
         clangimport::parseClangAstDump(tokenizer, istr);
         if (!tokenizer.tokens()) {
@@ -1059,7 +1061,8 @@ private:
 
 #define GET_SYMBOL_DB(AST) \
     const Settings settings = settingsBuilder().clang().platform(Platform::Type::Unix64).build(); \
-    Tokenizer tokenizer(settings, *this); \
+    TokenList tokenlist{settings, Standards::Language::CPP}; \
+    Tokenizer tokenizer(std::move(tokenlist), *this); \
     { \
         std::istringstream istr(AST); \
         clangimport::parseClangAstDump(tokenizer, istr); \
@@ -1138,8 +1141,8 @@ private:
         const Scope *scope = db->functionScopes[0];
         const Function *func = scope->function;
         ASSERT_EQUALS(2, func->argCount());
-        ASSERT_EQUALS(0, (long long)func->getArgumentVar(0)->nameToken());
-        ASSERT_EQUALS(0, (long long)func->getArgumentVar(1)->nameToken());
+        ASSERT(!func->getArgumentVar(0)->nameToken());
+        ASSERT(!func->getArgumentVar(1)->nameToken());
     }
 
     void symbolDatabaseFunction3() { // #9640

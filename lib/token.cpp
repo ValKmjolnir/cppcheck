@@ -60,16 +60,17 @@ namespace {
 const std::list<ValueFlow::Value> TokenImpl::mEmptyValueList;
 const std::string Token::mEmptyString;
 
-Token::Token(TokensFrontBack &tokensFrontBack)
-    : mTokensFrontBack(tokensFrontBack)
-    , mIsC(mTokensFrontBack.list.isC())
-    , mIsCpp(mTokensFrontBack.list.isCPP())
+Token::Token(const TokenList& tokenlist, std::shared_ptr<TokensFrontBack> tokensFrontBack)
+    : mList(tokenlist)
+    , mTokensFrontBack(std::move(tokensFrontBack))
+    , mIsC(mList.isC())
+    , mIsCpp(mList.isCPP())
 {
     mImpl = new TokenImpl();
 }
 
 Token::Token(const Token* tok)
-    : Token(const_cast<Token*>(tok)->mTokensFrontBack)
+    : Token(tok->mList, const_cast<Token*>(tok)->mTokensFrontBack)
 {
     fileIndex(tok->fileIndex());
     linenr(tok->linenr());
@@ -114,8 +115,15 @@ void Token::update_property_info()
     isStandardType(false);
 
     if (!mStr.empty()) {
-        if (mStr == "true" || mStr == "false")
-            tokType(eBoolean);
+        if (mStr == "true" || mStr == "false") {
+            if (mImpl->mVarId) {
+                if (mIsCpp)
+                    throw InternalError(this, "Internal error. VarId set for bool literal.");
+                tokType(eVariable);
+            }
+            else
+                tokType(eBoolean);
+        }
         else if (isStringLiteral(mStr)) {
             tokType(eString);
             isLong(isPrefixStringCharLiteral(mStr, '"', "L"));
@@ -124,10 +132,10 @@ void Token::update_property_info()
             tokType(eChar);
             isLong(isPrefixStringCharLiteral(mStr, '\'', "L"));
         }
-        else if (std::isalpha((unsigned char)mStr[0]) || mStr[0] == '_' || mStr[0] == '$') { // Name
+        else if (std::isalpha(static_cast<unsigned char>(mStr[0])) || mStr[0] == '_' || mStr[0] == '$') { // Name
             if (mImpl->mVarId)
                 tokType(eVariable);
-            else if (mTokensFrontBack.list.isKeyword(mStr)) {
+            else if (mList.isKeyword(mStr)) {
                 tokType(eKeyword);
                 update_property_isStandardType();
                 if (mTokType != eType) // cannot be a control-flow keyword when it is a type
@@ -278,7 +286,7 @@ void Token::deleteNext(nonneg int count)
     if (mNext)
         mNext->previous(this);
     else
-        mTokensFrontBack.back = this;
+        mTokensFrontBack->back = this;
 }
 
 void Token::deletePrevious(nonneg int count)
@@ -298,7 +306,7 @@ void Token::deletePrevious(nonneg int count)
     if (mPrevious)
         mPrevious->next(this);
     else
-        mTokensFrontBack.front = this;
+        mTokensFrontBack->front = this;
 }
 
 void Token::swapWithNext()
@@ -381,10 +389,10 @@ void Token::replace(Token *replaceThis, Token *start, Token *end)
     start->previous(replaceThis->previous());
     end->next(replaceThis->next());
 
-    if (end->mTokensFrontBack.back == end) {
+    if (end->mTokensFrontBack->back == end) {
         while (end->next())
             end = end->next();
-        end->mTokensFrontBack.back = end;
+        end->mTokensFrontBack->back = end;
     }
 
     // Update mProgressValue, fileIndex and linenr
@@ -761,7 +769,7 @@ nonneg int Token::getStrArraySize(const Token *tok)
     // cppcheck-suppress shadowFunction - TODO: fix this
     const std::string str(getStringLiteral(tok->str()));
     int sizeofstring = 1;
-    for (int i = 0; i < (int)str.size(); i++) {
+    for (int i = 0; i < static_cast<int>(str.size()); i++) {
         if (str[i] == '\\')
             ++i;
         ++sizeofstring;
@@ -776,7 +784,7 @@ nonneg int Token::getStrSize(const Token *tok, const Settings &settings)
     if (tok->valueType()) {
         ValueType vt(*tok->valueType());
         vt.pointer = 0;
-        sizeofType = ValueFlow::getSizeOf(vt, settings);
+        sizeofType = ValueFlow::getSizeOf(vt, settings, ValueFlow::Accuracy::ExactOrZero);
     }
     return getStrArraySize(tok) * sizeofType;
 }
@@ -1058,7 +1066,7 @@ Token* Token::insertToken(const std::string& tokenStr, const std::string& origin
     if (mStr.empty())
         newToken = this;
     else
-        newToken = new Token(mTokensFrontBack);
+        newToken = new Token(mList, mTokensFrontBack);
     newToken->str(tokenStr);
     if (!originalNameStr.empty())
         newToken->originalName(originalNameStr);
@@ -1075,7 +1083,7 @@ Token* Token::insertToken(const std::string& tokenStr, const std::string& origin
                 newToken->previous(this->previous());
                 newToken->previous()->next(newToken);
             } else {
-                mTokensFrontBack.front = newToken;
+                mTokensFrontBack->front = newToken;
             }
             this->previous(newToken);
             newToken->next(this);
@@ -1084,7 +1092,7 @@ Token* Token::insertToken(const std::string& tokenStr, const std::string& origin
                 newToken->next(this->next());
                 newToken->next()->previous(newToken);
             } else {
-                mTokensFrontBack.back = newToken;
+                mTokensFrontBack->back = newToken;
             }
             this->next(newToken);
             newToken->previous(this);
@@ -1731,7 +1739,7 @@ std::string Token::astStringZ3() const
     return "(" + str() + " " + astOperand1()->astStringZ3() + " " + astOperand2()->astStringZ3() + ")";
 }
 
-void Token::printValueFlow(bool xml, std::ostream &out) const
+void Token::printValueFlow(const std::vector<std::string>& files, bool xml, std::ostream &out) const
 {
     std::string outs;
 
@@ -1758,7 +1766,7 @@ void Token::printValueFlow(bool xml, std::ostream &out) const
         else {
             if (fileIndex != tok->fileIndex()) {
                 outs += "File ";
-                outs += tok->mTokensFrontBack.list.getFiles()[tok->fileIndex()];
+                outs += files[tok->fileIndex()];
                 outs += '\n';
                 line = 0;
             }
@@ -1947,8 +1955,8 @@ const ValueFlow::Value * Token::getInvalidValue(const Token *ftok, nonneg int ar
     for (auto it = mImpl->mValues->begin(); it != mImpl->mValues->end(); ++it) {
         if (it->isImpossible())
             continue;
-        if ((it->isIntValue() && !settings.library.isIntArgValid(ftok, argnr, it->intvalue)) ||
-            (it->isFloatValue() && !settings.library.isFloatArgValid(ftok, argnr, it->floatValue))) {
+        if ((it->isIntValue() && !settings.library.isIntArgValid(ftok, argnr, it->intvalue, settings)) ||
+            (it->isFloatValue() && !settings.library.isFloatArgValid(ftok, argnr, it->floatValue, settings))) {
             if (!ret || ret->isInconclusive() || (ret->condition && !it->isInconclusive()))
                 ret = &(*it);
             if (!ret->isInconclusive() && !ret->condition)
@@ -2534,7 +2542,7 @@ bool Token::hasKnownSymbolicValue(const Token* tok) const
     return mImpl->mValues &&
            std::any_of(mImpl->mValues->begin(), mImpl->mValues->end(), [&](const ValueFlow::Value& value) {
         return value.isKnown() && value.isSymbolicValue() && value.tokvalue &&
-        value.tokvalue->exprId() == tok->exprId();
+               value.tokvalue->exprId() == tok->exprId();
     });
 }
 
@@ -2607,7 +2615,7 @@ const ValueFlow::Value* Token::getMovedValue() const
         return nullptr;
     const auto it = std::find_if(mImpl->mValues->begin(), mImpl->mValues->end(), [](const ValueFlow::Value& value) {
         return value.isMovedValue() && !value.isImpossible() &&
-        value.moveKind != ValueFlow::Value::MoveKind::NonMovedVariable;
+               value.moveKind != ValueFlow::Value::MoveKind::NonMovedVariable;
     });
     return it == mImpl->mValues->end() ? nullptr : &*it;
 }
@@ -2712,8 +2720,4 @@ Token* findLambdaEndScope(Token* tok)
 }
 const Token* findLambdaEndScope(const Token* tok) {
     return findLambdaEndScope(const_cast<Token*>(tok));
-}
-
-const std::string& Token::fileName() const {
-    return mTokensFrontBack.list.getFiles()[mImpl->mFileIndex];
 }

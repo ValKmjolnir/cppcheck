@@ -35,6 +35,7 @@
 #include "helpdialog.h"
 #include "importproject.h"
 #include "librarydialog.h"
+#include "path.h"
 #include "platform.h"
 #include "projectfile.h"
 #include "projectfiledialog.h"
@@ -309,7 +310,7 @@ MainWindow::MainWindow(TranslationHandler* th, QSettings* settings) :
 #else
     constexpr Platform::Type defaultPlatform = Platform::Type::Unspecified;
 #endif
-    PlatformData &platform = mPlatforms.get((Platform::Type)mSettings->value(SETTINGS_CHECKED_PLATFORM, defaultPlatform).toInt());
+    PlatformData &platform = mPlatforms.get(static_cast<Platform::Type>(mSettings->value(SETTINGS_CHECKED_PLATFORM, defaultPlatform).toInt()));
     platform.mActMainWindow->setChecked(true);
 
     mNetworkAccessManager = new QNetworkAccessManager(this);
@@ -385,7 +386,7 @@ void MainWindow::loadSettings()
                mSettings->value(SETTINGS_WINDOW_HEIGHT, 600).toInt());
     }
 
-    const ReportType reportType = (ReportType)mSettings->value(SETTINGS_REPORT_TYPE, (int)ReportType::normal).toInt();
+    const ReportType reportType = static_cast<ReportType>(mSettings->value(SETTINGS_REPORT_TYPE, static_cast<int>(ReportType::normal)).toInt());
     mUI->mActionReportNormal->setChecked(reportType <= ReportType::normal);
     mUI->mActionReportAutosar->setChecked(reportType == ReportType::autosar);
     mUI->mActionReportCertC->setChecked(reportType == ReportType::certC);
@@ -433,7 +434,7 @@ void MainWindow::loadSettings()
     mUI->mActionToolBarFilter->setChecked(showFilterToolbar);
     mUI->mToolBarFilter->setVisible(showFilterToolbar);
 
-    const Standards::Language enforcedLanguage = (Standards::Language)mSettings->value(SETTINGS_ENFORCED_LANGUAGE, 0).toInt();
+    const Standards::Language enforcedLanguage = static_cast<Standards::Language>(mSettings->value(SETTINGS_ENFORCED_LANGUAGE, 0).toInt());
     if (enforcedLanguage == Standards::Language::CPP)
         mUI->mActionEnforceCpp->setChecked(true);
     else if (enforcedLanguage == Standards::Language::C)
@@ -483,7 +484,7 @@ void MainWindow::saveSettings() const
                                   mUI->mActionReportMisraCpp2008->isChecked() ? ReportType::misraCpp2008 :
                                   mUI->mActionReportMisraCpp2023->isChecked() ? ReportType::misraCpp2023 :
                                   ReportType::normal;
-    mSettings->setValue(SETTINGS_REPORT_TYPE, (int)reportType);
+    mSettings->setValue(SETTINGS_REPORT_TYPE, static_cast<int>(reportType));
 
     // Show * states
     mSettings->setValue(SETTINGS_SHOW_STYLE, mUI->mActionShowStyle->isChecked());
@@ -559,7 +560,7 @@ void MainWindow::doAnalyzeProject(ImportProject p, const bool checkLibrary, cons
         p.ignorePaths(v);
 
         if (!mProjectFile->getAnalyzeAllVsConfigs()) {
-            const Platform::Type platform = (Platform::Type) mSettings->value(SETTINGS_CHECKED_PLATFORM, 0).toInt();
+            const Platform::Type platform = static_cast<Platform::Type>(mSettings->value(SETTINGS_CHECKED_PLATFORM, 0).toInt());
             std::vector<std::string> configurations;
             const QStringList configs = mProjectFile->getVsConfigurations();
             std::transform(configs.cbegin(), configs.cend(), std::back_inserter(configurations), [](const QString& e) {
@@ -702,7 +703,7 @@ void MainWindow::analyzeCode(const QString& code, const QString& filename)
     checkLockDownUI();
     clearResults();
     mUI->mResults->checkingStarted(1);
-    cppcheck.check(FileWithDetails(filename.toStdString()), code.toStdString());
+    cppcheck.check(FileWithDetails(filename.toStdString(), Path::identify(filename.toStdString(), false), 0), code.toStdString());
     analysisDone();
 
     // Expand results
@@ -1009,10 +1010,7 @@ QString MainWindow::loadAddon(Settings &settings, const QString &filesDir, const
         if (!misraFile.isEmpty()) {
             QString arg;
             picojson::array arr;
-            if (misraFile.endsWith(".pdf", Qt::CaseInsensitive))
-                arg = "--misra-pdf=" + misraFile;
-            else
-                arg = "--rule-texts=" + misraFile;
+            arg = "--rule-texts=" + misraFile;
             arr.emplace_back(arg.toStdString());
             obj["args"] = picojson::value(arr);
         }
@@ -1038,6 +1036,7 @@ bool MainWindow::getCppcheckSettings(Settings& settings, Suppressions& supprs)
     Settings::terminate(true);
 
     settings.exename = QCoreApplication::applicationFilePath().toStdString();
+    settings.templateFormat = "{file}:{line}:{column}: {severity}:{inconclusive:inconclusive:} {message} [{id}]";
 
     // default to --check-level=normal for GUI for now
     settings.setCheckLevel(Settings::CheckLevel::normal);
@@ -1125,7 +1124,7 @@ bool MainWindow::getCppcheckSettings(Settings& settings, Suppressions& supprs)
             settings.platform.loadFromFile(applicationFilePath.toStdString().c_str(), platform.toStdString());
         } else {
             for (int i = Platform::Type::Native; i <= Platform::Type::Unix64; i++) {
-                const auto p = (Platform::Type)i;
+                const auto p = static_cast<Platform::Type>(i);
                 if (platform == Platform::toString(p)) {
                     settings.platform.set(p);
                     break;
@@ -1156,6 +1155,8 @@ bool MainWindow::getCppcheckSettings(Settings& settings, Suppressions& supprs)
             settings.checkUnknownFunctionReturn.insert(s.toStdString());
 
         for (const QString& addon : mProjectFile->getAddons()) {
+            if (isCppcheckPremium() && addon == "misra")
+                continue;
             const QString addonError = loadAddon(settings, filesDir, pythonCmd, addon);
             if (!addonError.isEmpty()) {
                 QMessageBox::critical(this, tr("Error"), tr("%1\n\nAnalysis is aborted.").arg(addonError));
@@ -1171,10 +1172,9 @@ bool MainWindow::getCppcheckSettings(Settings& settings, Suppressions& supprs)
                 premiumArgs += " --cert-c-int-precision=" + QString::number(mProjectFile->getCertIntPrecision());
             for (const QString& c: mProjectFile->getCodingStandards())
                 premiumArgs += " --" + c;
-            if (!premiumArgs.contains("misra") && mProjectFile->getAddons().contains("misra"))
+            if (!premiumArgs.contains("--misra-c-") && mProjectFile->getAddons().contains("misra"))
                 premiumArgs += " --misra-c-2012";
             settings.premiumArgs = premiumArgs.mid(1).toStdString();
-            settings.setMisraRuleTexts(CheckThread::executeCommand);
         }
     }
     else
@@ -1205,10 +1205,10 @@ bool MainWindow::getCppcheckSettings(Settings& settings, Suppressions& supprs)
     settings.jobs = mSettings->value(SETTINGS_CHECK_THREADS, 1).toInt();
     settings.certainty.setEnabled(Certainty::inconclusive, mSettings->value(SETTINGS_INCONCLUSIVE_ERRORS, false).toBool());
     if (!mProjectFile || settings.platform.type == Platform::Type::Unspecified)
-        settings.platform.set((Platform::Type) mSettings->value(SETTINGS_CHECKED_PLATFORM, 0).toInt());
+        settings.platform.set(static_cast<Platform::Type>(mSettings->value(SETTINGS_CHECKED_PLATFORM, 0).toInt()));
     settings.standards.setCPP(mSettings->value(SETTINGS_STD_CPP, QString()).toString().toStdString());
     settings.standards.setC(mSettings->value(SETTINGS_STD_C, QString()).toString().toStdString());
-    settings.enforcedLang = (Standards::Language)mSettings->value(SETTINGS_ENFORCED_LANGUAGE, 0).toInt();
+    settings.enforcedLang = static_cast<Standards::Language>(mSettings->value(SETTINGS_ENFORCED_LANGUAGE, 0).toInt());
 
     settings.jobs = std::max(settings.jobs, 1u);
 
@@ -2133,7 +2133,7 @@ void MainWindow::updateMRUMenuItems()
     if (removed)
         mSettings->setValue(SETTINGS_MRU_PROJECTS, projects);
 
-    const int numRecentProjects = qMin(projects.size(), (int)MaxRecentProjects);
+    const int numRecentProjects = qMin(projects.size(), static_cast<int>(MaxRecentProjects));
     for (int i = 0; i < numRecentProjects; i++) {
         const QString filename = QFileInfo(projects[i]).fileName();
         const QString text = QString("&%1 %2").arg(i + 1).arg(filename);
@@ -2172,7 +2172,7 @@ void MainWindow::selectPlatform()
 {
     auto *action = qobject_cast<QAction *>(sender());
     if (action) {
-        const Platform::Type platform = (Platform::Type) action->data().toInt();
+        const Platform::Type platform = static_cast<Platform::Type>(action->data().toInt());
         mSettings->setValue(SETTINGS_CHECKED_PLATFORM, platform);
     }
 }

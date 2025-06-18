@@ -20,7 +20,7 @@
 #define helpersH
 
 #include "library.h"
-#include "preprocessor.h"
+#include "path.h"
 #include "settings.h"
 #include "standards.h"
 #include "tokenize.h"
@@ -37,9 +37,6 @@
 class Token;
 class SuppressionList;
 class ErrorLogger;
-namespace simplecpp {
-    struct DUI;
-}
 namespace tinyxml2 {
     class XMLDocument;
 }
@@ -47,61 +44,53 @@ namespace tinyxml2 {
 // TODO: make Tokenizer private
 class SimpleTokenizer : public Tokenizer {
 public:
-    template<size_t size>
-    SimpleTokenizer(ErrorLogger& errorlogger, const char (&code)[size], bool cpp = true)
-        : Tokenizer{s_settings, errorlogger}
-    {
-        if (!tokenize(code, cpp))
-            throw std::runtime_error("creating tokens failed");
-    }
-
-    SimpleTokenizer(const Settings& settings, ErrorLogger& errorlogger)
-        : Tokenizer{settings, errorlogger}
+    explicit SimpleTokenizer(ErrorLogger& errorlogger, bool cpp = true)
+        : Tokenizer{TokenList{s_settings, cpp ? Standards::Language::CPP : Standards::Language::C}, errorlogger}
     {}
 
-    /*
-        Token* tokens() {
-        return Tokenizer::tokens();
-        }
+    SimpleTokenizer(const Settings& settings, ErrorLogger& errorlogger, bool cpp = true)
+        : Tokenizer{TokenList{settings, cpp ? Standards::Language::CPP : Standards::Language::C}, errorlogger}
+    {}
 
-        const Token* tokens() const {
-        return Tokenizer::tokens();
-        }
-     */
-
-    /**
-     * Tokenize code
-     * @param code The code
-     * @param cpp Indicates if the code is C++
-     * @param configuration E.g. "A" for code where "#ifdef A" is true
-     * @return false if source code contains syntax errors
-     */
-    template<size_t size>
-    bool tokenize(const char (&code)[size],
-                  bool cpp = true,
-                  const std::string &configuration = "")
+    SimpleTokenizer(const Settings& settings, ErrorLogger& errorlogger, const std::string& filename)
+        : Tokenizer{TokenList{settings, Path::identify(filename, false)}, errorlogger}
     {
-        std::istringstream istr(code);
-        if (!list.createTokens(istr, cpp ? "test.cpp" : "test.c"))
-            return false;
-
-        return simplifyTokens1(configuration);
+        list.appendFileIfNew(filename);
     }
 
-    // TODO: get rid of this
-    bool tokenize(const std::string& code,
-                  bool cpp = true,
-                  const std::string &configuration = "")
+    template<size_t size>
+    bool tokenize(const char (&code)[size])
     {
         std::istringstream istr(code);
-        if (!list.createTokens(istr, cpp ? "test.cpp" : "test.c"))
-            return false;
+        return tokenize(istr, std::string(list.isCPP() ? "test.cpp" : "test.c"));
+    }
 
-        return simplifyTokens1(configuration);
+    bool tokenize(const std::string& code)
+    {
+        std::istringstream istr(code);
+        return tokenize(istr, std::string(list.isCPP() ? "test.cpp" : "test.c"));
     }
 
 private:
-    // TODO. find a better solution
+    /**
+     * Tokenize code
+     * @param istr The code as stream
+     * @param filename Indicates if the code is C++
+     * @return false if source code contains syntax errors
+     */
+    bool tokenize(std::istream& istr,
+                  const std::string& filename)
+    {
+        if (list.front())
+            throw std::runtime_error("token list is not empty");
+        list.appendFileIfNew(filename);
+        if (!list.createTokens(istr))
+            return false;
+
+        return simplifyTokens1("");
+    }
+
+    // TODO: find a better solution
     static const Settings s_settings;
 };
 
@@ -110,9 +99,20 @@ class SimpleTokenList
 public:
     template<size_t size>
     explicit SimpleTokenList(const char (&code)[size], Standards::Language lang = Standards::Language::CPP)
+        : list{settings, lang}
     {
         std::istringstream iss(code);
-        if (!list.createTokens(iss, lang))
+        if (!list.createTokens(iss))
+            throw std::runtime_error("creating tokens failed");
+    }
+
+    template<size_t size>
+    explicit SimpleTokenList(const char (&code)[size], const std::string& file0, Standards::Language lang = Standards::Language::CPP)
+        : list{settings, lang}
+    {
+        std::istringstream iss(code);
+        list.appendFileIfNew(file0);
+        if (!list.createTokens(iss))
             throw std::runtime_error("creating tokens failed");
     }
 
@@ -124,9 +124,13 @@ public:
         return list.front();
     }
 
+    const TokenList& get() const {
+        return list;
+    }
+
 private:
     const Settings settings;
-    TokenList list{&settings};
+    TokenList list;
 };
 
 
@@ -170,12 +174,6 @@ public:
      */
     static std::string getcode(const Settings& settings, ErrorLogger& errorlogger, const std::string &filedata, const std::string &cfg, const std::string &filename, SuppressionList *inlineSuppression = nullptr);
     static std::map<std::string, std::string> getcode(const Settings& settings, ErrorLogger& errorlogger, const char code[], const std::string &filename = "file.c", SuppressionList *inlineSuppression = nullptr);
-
-    static void preprocess(const char code[], std::vector<std::string> &files, Tokenizer& tokenizer, ErrorLogger& errorlogger);
-    static void preprocess(const char code[], std::vector<std::string> &files, Tokenizer& tokenizer, ErrorLogger& errorlogger, const simplecpp::DUI& dui);
-
-    /** get remark comments */
-    static std::vector<RemarkComment> getRemarkComments(const char code[], ErrorLogger& errorLogger);
 
 private:
     static std::map<std::string, std::string> getcode(const Settings& settings, ErrorLogger& errorlogger, const char code[], std::set<std::string> cfgs, const std::string &filename = "file.c", SuppressionList *inlineSuppression = nullptr);
@@ -244,6 +242,39 @@ struct LibraryHelper
     static bool loadxmldata(Library &lib, const char xmldata[], std::size_t len);
     static bool loadxmldata(Library &lib, Library::Error& liberr, const char xmldata[], std::size_t len);
     static Library::Error loadxmldoc(Library &lib, const tinyxml2::XMLDocument& doc);
+};
+
+class SimpleTokenizer2 : public Tokenizer {
+public:
+    template<size_t size>
+    SimpleTokenizer2(const Settings &settings, ErrorLogger &errorlogger, const char (&code)[size], const std::string& file0)
+        : Tokenizer{TokenList{settings, Path::identify(file0, false)}, errorlogger}
+    {
+        preprocess(code, mFiles, file0, *this, errorlogger);
+    }
+
+    // TODO: get rid of this
+    SimpleTokenizer2(const Settings &settings, ErrorLogger &errorlogger, const char code[], const std::string& file0)
+        : Tokenizer{TokenList{settings, Path::identify(file0, false)}, errorlogger}
+    {
+        preprocess(code, mFiles, file0, *this, errorlogger);
+    }
+
+private:
+    static void preprocess(const char code[], std::vector<std::string> &files, const std::string& file0, Tokenizer& tokenizer, ErrorLogger& errorlogger);
+
+    std::vector<std::string> mFiles;
+};
+
+struct TokenListHelper
+{
+    static bool createTokens(TokenList& tokenlist, std::istream& istr, const std::string& file)
+    {
+        if (tokenlist.front())
+            throw std::runtime_error("token list is not empty");
+        tokenlist.appendFileIfNew(file);
+        return tokenlist.createTokens(istr);
+    }
 };
 
 #endif // helpersH

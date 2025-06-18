@@ -69,16 +69,16 @@ public:
         mFlags = 0xFFFFFFFF;
     }
     bool isEnabled(T flag) const {
-        return (mFlags & (1U << (uint32_t)flag)) != 0;
+        return (mFlags & (1U << static_cast<uint32_t>(flag))) != 0;
     }
     void enable(T flag) {
-        mFlags |= (1U << (uint32_t)flag);
+        mFlags |= (1U << static_cast<uint32_t>(flag));
     }
     void enable(SimpleEnableGroup<T> group) {
         mFlags |= group.intValue();
     }
     void disable(T flag) {
-        mFlags &= ~(1U << (uint32_t)flag);
+        mFlags &= ~(1U << static_cast<uint32_t>(flag));
     }
     void disable(SimpleEnableGroup<T> group) {
         mFlags &= ~(group.intValue());
@@ -123,6 +123,9 @@ public:
     /** @brief Path to the python interpreter to be used to run addons. */
     std::string addonPython;
 
+    /** @brief Analyze all configuration in Visual Studio project. */
+    bool analyzeAllVsConfigs{true};
+
     /** @brief Paths used as base for conversion to relative paths. */
     std::vector<std::string> basePaths;
 
@@ -162,7 +165,10 @@ public:
     std::string clangExecutable = "clang";
 
     /** Use clang-tidy */
-    bool clangTidy{}; // TODO: CLI
+    bool clangTidy{};
+
+    /** Custom clang-tidy executable */
+    std::string clangTidyExecutable = "clang-tidy";
 
     /** Internal: Clear the simplecpp non-existing include cache */
     bool clearIncludeCache{}; // internal
@@ -181,6 +187,9 @@ public:
 
     /** @brief Are we running from DACA script? */
     bool daca{};
+
+    /** @brief Is --debug-ast given? */
+    bool debugast{};
 
     /** @brief Is --debug-clang-output given? */
     bool debugClangOutput{};
@@ -209,8 +218,14 @@ public:
     /** @brief Is --debug-simplified given? */
     bool debugSimplified{};
 
+    /** @brief Is --debug-symdb given? */
+    bool debugsymdb{};
+
     /** @brief Is --debug-template given? */
     bool debugtemplate{};
+
+    /** @brief Is --debug-valueflow given? */
+    bool debugvalueflow{};
 
     /** @brief Is --debug-warnings given? */
     bool debugwarnings{};
@@ -528,17 +543,12 @@ public:
 
     void setCheckLevel(CheckLevel level);
 
-    using ExecuteCmdFn = std::function<int (std::string,std::vector<std::string>,std::string,std::string&)>;
-    void setMisraRuleTexts(const ExecuteCmdFn& executeCommand);
-    void setMisraRuleTexts(const std::string& data);
-    std::string getMisraRuleText(const std::string& id, const std::string& text) const;
 
     static ExecutorType defaultExecutor();
 
 private:
     static std::string parseEnabled(const std::string &str, std::tuple<SimpleEnableGroup<Severity>, SimpleEnableGroup<Checks>> &groups);
     std::string applyEnabled(const std::string &str, bool enable);
-    std::map<std::string, std::string> mMisraRuleTexts;
 };
 
 /// @}

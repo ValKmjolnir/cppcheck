@@ -43,6 +43,7 @@ public:
     void reportProgress(const std::string& /*filename*/,
                         const char /*stage*/[],
                         const std::size_t /*value*/) override {}
+    void reportMetric(const std::string & /*metric*/) override {}
 };
 
 static Settings create_settings()
@@ -57,7 +58,7 @@ static Settings create_settings()
 }
 static const Settings s_settings = create_settings();
 static DummyErrorLogger s_errorLogger;
-static const FileWithDetails s_file("test.cpp");
+static const FileWithDetails s_file("test.cpp", Standards::Language::CPP, 0);
 
 static void doCheck(const std::string& code)
 {

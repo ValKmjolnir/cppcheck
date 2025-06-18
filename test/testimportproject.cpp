@@ -64,14 +64,17 @@ private:
         TEST_CASE(importCompileCommands10); // #10887: include path with space
         TEST_CASE(importCompileCommands11); // include path order
         TEST_CASE(importCompileCommands12); // #13040: "directory" is parent directory, relative include paths
+        TEST_CASE(importCompileCommands13); // #13333: duplicate file entries
         TEST_CASE(importCompileCommandsArgumentsSection); // Handle arguments section
         TEST_CASE(importCompileCommandsNoCommandSection); // gracefully handles malformed json
+        TEST_CASE(importCompileCommandsDirectoryMissing); // 'directory' field missing
+        TEST_CASE(importCompileCommandsDirectoryInvalid); // 'directory' field not a string
         TEST_CASE(importCppcheckGuiProject);
         TEST_CASE(ignorePaths);
     }
 
     void setDefines() const {
-        FileSettings fs{"test.cpp"};
+        FileSettings fs{"test.cpp", Standards::Language::CPP, 0};
 
         ImportProject::fsSetDefines(fs, "A");
         ASSERT_EQUALS("A=1", fs.defines);
@@ -87,7 +90,7 @@ private:
     }
 
     void setIncludePaths1() const {
-        FileSettings fs{"test.cpp"};
+        FileSettings fs{"test.cpp", Standards::Language::CPP, 0};
         std::list<std::string> in(1, "../include");
         std::map<std::string, std::string, cppcheck::stricmp> variables;
         ImportProject::fsSetIncludePaths(fs, "abc/def/", in, variables);
@@ -96,7 +99,7 @@ private:
     }
 
     void setIncludePaths2() const {
-        FileSettings fs{"test.cpp"};
+        FileSettings fs{"test.cpp", Standards::Language::CPP, 0};
         std::list<std::string> in(1, "$(SolutionDir)other");
         std::map<std::string, std::string, cppcheck::stricmp> variables;
         variables["SolutionDir"] = "c:/abc/";
@@ -106,7 +109,7 @@ private:
     }
 
     void setIncludePaths3() const { // macro names are case insensitive
-        FileSettings fs{"test.cpp"};
+        FileSettings fs{"test.cpp", Standards::Language::CPP, 0};
         std::list<std::string> in(1, "$(SOLUTIONDIR)other");
         std::map<std::string, std::string, cppcheck::stricmp> variables;
         variables["SolutionDir"] = "c:/abc/";
@@ -338,6 +341,28 @@ private:
         ASSERT_EQUALS("/x/", fs.includePaths.front());
     }
 
+    void importCompileCommands13() const { // #13333
+        REDIRECT;
+        constexpr char json[] =
+            R"([{
+               "file": "/x/src/1.c" ,
+               "directory": "/x",
+               "command": "cc -c -I. src/1.c"
+            },{
+               "file": "/x/src/1.c" ,
+               "directory": "/x",
+               "command": "cc -c -I. src/1.c"
+            }])";
+        std::istringstream istr(json);
+        TestImporter importer;
+        ASSERT_EQUALS(true, importer.importCompileCommands(istr));
+        ASSERT_EQUALS(2, importer.fileSettings.size());
+        const FileSettings &fs1 = importer.fileSettings.front();
+        const FileSettings &fs2 = importer.fileSettings.back();
+        ASSERT_EQUALS(0, fs1.fileIndex);
+        ASSERT_EQUALS(1, fs2.fileIndex);
+    }
+
     void importCompileCommandsArgumentsSection() const {
         REDIRECT;
         constexpr char json[] = "[ { \"directory\": \"/tmp/\","
@@ -359,6 +384,27 @@ private:
         ASSERT_EQUALS(false, importer.importCompileCommands(istr));
         ASSERT_EQUALS(0, importer.fileSettings.size());
         ASSERT_EQUALS("cppcheck: error: no 'arguments' or 'command' field found in compilation database entry\n", GET_REDIRECT_OUTPUT);
+    }
+
+    void importCompileCommandsDirectoryMissing() const {
+        REDIRECT;
+        constexpr char json[] = "[ { \"file\": \"src.mm\" } ]";
+        std::istringstream istr(json);
+        TestImporter importer;
+        ASSERT_EQUALS(false, importer.importCompileCommands(istr));
+        ASSERT_EQUALS(0, importer.fileSettings.size());
+        ASSERT_EQUALS("cppcheck: error: 'directory' field in compilation database entry missing\n", GET_REDIRECT_OUTPUT);
+    }
+
+    void importCompileCommandsDirectoryInvalid() const {
+        REDIRECT;
+        constexpr char json[] = "[ { \"directory\": 123,"
+                                "\"file\": \"src.mm\" } ]";
+        std::istringstream istr(json);
+        TestImporter importer;
+        ASSERT_EQUALS(false, importer.importCompileCommands(istr));
+        ASSERT_EQUALS(0, importer.fileSettings.size());
+        ASSERT_EQUALS("cppcheck: error: 'directory' field in compilation database entry is not a string\n", GET_REDIRECT_OUTPUT);
     }
 
     void importCppcheckGuiProject() const {
@@ -393,8 +439,8 @@ private:
     }
 
     void ignorePaths() const {
-        FileSettings fs1{"foo/bar"};
-        FileSettings fs2{"qwe/rty"};
+        FileSettings fs1{"foo/bar", Standards::Language::CPP, 0};
+        FileSettings fs2{"qwe/rty", Standards::Language::CPP, 0};
         TestImporter project;
         project.fileSettings = {std::move(fs1), std::move(fs2)};
 

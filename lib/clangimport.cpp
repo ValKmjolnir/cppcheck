@@ -139,11 +139,11 @@ static std::vector<std::string> splitString(const std::string &line)
             pos2 = line.find('\"', pos1+1);
         else if (line[pos1] == '\'') {
             pos2 = line.find('\'', pos1+1);
-            if (pos2 < (int)line.size() - 3 && line.compare(pos2, 3, "\':\'", 0, 3) == 0)
+            if (pos2 < static_cast<int>(line.size()) - 3 && line.compare(pos2, 3, "\':\'", 0, 3) == 0)
                 pos2 = line.find('\'', pos2 + 3);
         } else {
             pos2 = pos1;
-            while (pos2 < line.size() && (line[pos2] == '_' || line[pos2] == ':' || std::isalnum((unsigned char)line[pos2])))
+            while (pos2 < line.size() && (line[pos2] == '_' || line[pos2] == ':' || std::isalnum(static_cast<unsigned char>(line[pos2]))))
                 ++pos2;
             if (pos2 > pos1 && pos2 < line.size() && line[pos2] == '<' && std::isalpha(line[pos1])) {
                 int tlevel = 1;
@@ -633,7 +633,7 @@ const ::Type * clangimport::AstNode::addTypeTokens(TokenList &tokenList, const s
     for (const Token *typeToken = tokenList.back(); Token::Match(typeToken, "&|*|%name%"); typeToken = typeToken->previous()) {
         if (!typeToken->isName())
             continue;
-        const ::Type *recordType = scope->check->findVariableType(scope, typeToken);
+        const ::Type *recordType = scope->symdb.findVariableType(scope, typeToken);
         if (recordType) {
             const_cast<Token*>(typeToken)->type(recordType);
             return recordType;
@@ -677,8 +677,7 @@ void clangimport::AstNode::setValueType(Token *tok)
             // TODO
             continue;
 
-        TokenList decl(nullptr);
-        decl.setLang(tok->isCpp() ? Standards::Language::CPP : Standards::Language::C);
+        TokenList decl(mData->mSettings, tok->isCpp() ? Standards::Language::CPP : Standards::Language::C);
         addTypeTokens(decl, type, tok->scope());
         if (!decl.front())
             break;
@@ -703,14 +702,13 @@ Scope *clangimport::AstNode::createScope(TokenList &tokenList, ScopeType scopeTy
 
     auto *nestedIn = const_cast<Scope *>(getNestedInScope(tokenList));
 
-    symbolDatabase.scopeList.emplace_back(nullptr, nullptr, nestedIn);
+    symbolDatabase.scopeList.emplace_back(nestedIn->symdb, nullptr, nestedIn);
     Scope *scope = &symbolDatabase.scopeList.back();
     if (scopeType == ScopeType::eEnum)
         scope->enumeratorList.reserve(children2.size());
     nestedIn->nestedList.push_back(scope);
     scope->type = scopeType;
-    scope->classDef = def;
-    scope->check = nestedIn->check;
+    scope->classDef = def; // TODO: pass into ctor
     if (Token::Match(def, "if|for|while (")) {
         std::map<const Variable *, const Variable *> replaceVar;
         for (const Token *vartok = def->tokAt(2); vartok; vartok = vartok->next()) {
@@ -1267,7 +1265,7 @@ Token *clangimport::AstNode::createTokens(TokenList &tokenList)
         return addtoken(tokenList, getSpelling());
     }
     if (nodeType == UnaryOperator) {
-        int index = (int)mExtTokens.size() - 1;
+        int index = static_cast<int>(mExtTokens.size()) - 1;
         while (index > 0 && mExtTokens[index][0] != '\'')
             --index;
         Token *unop = addtoken(tokenList, unquote(mExtTokens[index]));
@@ -1405,11 +1403,10 @@ void clangimport::AstNode::createTokensFunctionDecl(TokenList &tokenList)
 
     Scope *scope = nullptr;
     if (hasBody) {
-        symbolDatabase.scopeList.emplace_back(nullptr, nullptr, nestedIn);
+        symbolDatabase.scopeList.emplace_back(symbolDatabase, nullptr, nestedIn);
         scope = &symbolDatabase.scopeList.back();
-        scope->check = &symbolDatabase;
         scope->function = function;
-        scope->classDef = nameToken;
+        scope->classDef = nameToken; // TODO: pass into ctor
         scope->type = ScopeType::eFunction;
         scope->className = nameToken->str();
         nestedIn->nestedList.push_back(scope);
@@ -1502,12 +1499,12 @@ void clangimport::AstNode::createTokensForCXXRecord(TokenList &tokenList)
         std::vector<AstNodePtr> children2;
         std::copy_if(children.cbegin(), children.cend(), std::back_inserter(children2), [](const AstNodePtr& child) {
             return child->nodeType == CXXConstructorDecl ||
-            child->nodeType == CXXDestructorDecl ||
-            child->nodeType == CXXMethodDecl ||
-            child->nodeType == FieldDecl ||
-            child->nodeType == VarDecl ||
-            child->nodeType == AccessSpecDecl ||
-            child->nodeType == TypedefDecl;
+                   child->nodeType == CXXDestructorDecl ||
+                   child->nodeType == CXXMethodDecl ||
+                   child->nodeType == FieldDecl ||
+                   child->nodeType == VarDecl ||
+                   child->nodeType == AccessSpecDecl ||
+                   child->nodeType == TypedefDecl;
         });
         Scope *scope = createScope(tokenList, isStruct ? ScopeType::eStruct : ScopeType::eClass, children2, classToken);
         const std::string addr = mExtTokens[0];
@@ -1621,9 +1618,8 @@ void clangimport::parseClangAstDump(Tokenizer &tokenizer, std::istream &f)
 
     tokenizer.createSymbolDatabase();
     auto *symbolDatabase = const_cast<SymbolDatabase *>(tokenizer.getSymbolDatabase());
-    symbolDatabase->scopeList.emplace_back(nullptr, nullptr, nullptr);
+    symbolDatabase->scopeList.emplace_back(*symbolDatabase, nullptr, nullptr);
     symbolDatabase->scopeList.back().type = ScopeType::eGlobal;
-    symbolDatabase->scopeList.back().check = symbolDatabase;
 
     clangimport::Data data(tokenizer.getSettings(), *symbolDatabase);
     std::string line;

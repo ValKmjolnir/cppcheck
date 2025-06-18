@@ -28,6 +28,7 @@
 #include <iosfwd>
 #include <list>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -54,7 +55,7 @@ class CPPCHECKLIB Tokenizer {
     friend class TestTokenizer;
 
 public:
-    explicit Tokenizer(const Settings & settings, ErrorLogger &errorLogger);
+    Tokenizer(TokenList tokenList, ErrorLogger &errorLogger);
     ~Tokenizer();
 
     void setTimerResults(TimerResults *tr) {
@@ -79,7 +80,11 @@ public:
      */
     bool isScopeNoReturn(const Token *endScopeToken, bool *unknown = nullptr) const;
 
-    bool simplifyTokens1(const std::string &configuration);
+    bool simplifyTokens1(const std::string &configuration, int fileIndex=0);
+
+    bool isVarUsedInTemplate(nonneg int id) const {
+        return mTemplateVarIdUsage.count(id) != 0;
+    }
 
 private:
     /** Set variable id */
@@ -133,7 +138,7 @@ private:
 
     /** Insert array size where it isn't given */
     void arraySize();
-    void arraySizeAfterValueFlow(); // cppcheck-suppress functionConst
+    void arraySizeAfterValueFlow();
 
     /** Simplify labels and 'case|default' syntaxes.
      */
@@ -165,7 +170,7 @@ private:
      * \param only_k_r_fpar Only simplify K&R function parameters
      */
     void simplifyVarDecl( bool only_k_r_fpar);
-    void simplifyVarDecl(Token * tokBegin, const Token * tokEnd, bool only_k_r_fpar); // cppcheck-suppress functionConst // has side effects
+    void simplifyVarDecl(Token * tokBegin, const Token * tokEnd, bool only_k_r_fpar);
 
     /**
      * Simplify variable initialization
@@ -217,9 +222,6 @@ private:
      *         or NULL when syntaxError is called
      */
     Token * simplifyAddBracesPair(Token *tok, bool commandWithCondition);
-
-    // Convert "using ...;" to corresponding typedef
-    void simplifyUsingToTypedef();
 
     /**
      * typedef A mytype;
@@ -546,11 +548,6 @@ private:
                                       std::map<nonneg int, std::map<std::string, nonneg int>>& structMembers,
                                       nonneg int &varId_);
 
-    /**
-     * Output list of unknown types.
-     */
-    void printUnknownTypes() const;
-
     /** Find end of SQL (or PL/SQL) block */
     static const Token *findSQLBlockEnd(const Token *tokSQLStart);
 
@@ -563,11 +560,8 @@ public:
     void createSymbolDatabase();
 
     /** print --debug output if debug flags match the simplification:
-     * 0=unknown/both simplifications
-     * 1=1st simplifications
-     * 2=2nd simplifications
      */
-    void printDebugOutput(int simplification, std::ostream &out) const;
+    void printDebugOutput(std::ostream &out) const;
 
     void dump(std::ostream &out) const;
 
@@ -613,6 +607,10 @@ public:
         return mSettings;
     }
 
+    ErrorLogger &getErrorLogger() {
+        return mErrorLogger;
+    }
+
     void calculateScopes();
 
     /** Disable copy constructor */
@@ -651,6 +649,8 @@ private:
     SymbolDatabase* mSymbolDatabase{};
 
     TemplateSimplifier * const mTemplateSimplifier;
+
+    std::set<nonneg int> mTemplateVarIdUsage;
 
     /** E.g. "A" for code where "#ifdef A" is true. This is used to
         print additional information in error situations. */

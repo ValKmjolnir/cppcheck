@@ -796,6 +796,9 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
 
 
             if (!membervar.empty()) {
+                if (mTokenizer->isCPP() && Token::simpleMatch(tok->astParent(), ">>"))
+                    return true;
+
                 if (isMemberVariableAssignment(tok, membervar)) {
                     checkRhs(tok, var, *alloc, number_of_if, membervar);
                     return true;
@@ -1667,7 +1670,8 @@ void CheckUninitVar::valueFlowUninit()
                     const bool deref = CheckNullPointer::isPointerDeRef(tok, unknown, *mSettings);
                     uninitderef = deref && v->indirect == 0;
                     const bool isleaf = isLeafDot(tok) || uninitderef;
-                    if (!isleaf && Token::Match(tok->astParent(), ". %name%") && (tok->astParent()->next()->varId() || tok->astParent()->next()->isEnumerator()))
+                    if (!isleaf && Token::Match(tok->astParent(), ". %name%") &&
+                        (tok->astParent()->next()->variable() || tok->astParent()->next()->isEnumerator()))
                         continue;
                 }
                 const ExprUsage usage = getExprUsage(tok, v->indirect, *mSettings);

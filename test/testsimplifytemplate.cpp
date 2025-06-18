@@ -19,6 +19,7 @@
 #include "errortypes.h"
 #include "fixture.h"
 #include "helpers.h"
+#include "path.h"
 #include "settings.h"
 #include "templatesimplifier.h"
 #include "token.h"
@@ -28,6 +29,7 @@
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 class TestSimplifyTemplate : public TestFixture {
@@ -217,6 +219,8 @@ private:
         TEST_CASE(template178);
         TEST_CASE(template179);
         TEST_CASE(template180);
+        TEST_CASE(template181);
+        TEST_CASE(template182); // #13770
         TEST_CASE(template_specialization_1);  // #7868 - template specialization template <typename T> struct S<C<T>> {..};
         TEST_CASE(template_specialization_2);  // #7868 - template specialization template <typename T> struct S<C<T>> {..};
         TEST_CASE(template_specialization_3);
@@ -308,6 +312,8 @@ private:
 
         TEST_CASE(explicitBool1);
         TEST_CASE(explicitBool2);
+
+        TEST_CASE(templateArgPreserveType); // #13882 - type of template argument
     }
 
     struct CheckOptions
@@ -674,7 +680,7 @@ private:
                                  "vec<4> v ; "
                                  "struct vec<4> { "
                                  "vec<4> ( ) { } "
-                                 "vec<4> ( const vec < 4 - 1 > & v ) { } "
+                                 "vec<4> ( const vec < ( int ) 4 - 1 > & v ) { } "
                                  "} ;";
 
         ASSERT_EQUALS(expected2, tok(code2));
@@ -1299,7 +1305,7 @@ private:
                                 "int calculate_value<1,1> ( ) ; "
                                 "int value ; value = calculate_value<1,1> ( ) ; "
                                 "int calculate_value<1,1> ( ) { "
-                                "if ( 1 != 1 ) { "
+                                "if ( ( int ) 1 != ( int ) 1 ) { "
                                 "return sum<0> ( ) ; "
                                 "} else { "
                                 "return 0 ; "
@@ -1329,16 +1335,16 @@ private:
                                 "} ; "
                                 "const int x = Factorial<4> :: value ; "
                                 "struct Factorial<4> { "
-                                "enum Anonymous0 { value = 4 * Factorial<3> :: value } ; "
+                                "enum Anonymous0 { value = ( int ) 4 * Factorial<3> :: value } ; "
                                 "} ; "
                                 "struct Factorial<3> { "
-                                "enum Anonymous0 { value = 3 * Factorial<2> :: value } ; "
+                                "enum Anonymous0 { value = ( int ) 3 * Factorial<2> :: value } ; "
                                 "} ; "
                                 "struct Factorial<2> { "
-                                "enum Anonymous0 { value = 2 * Factorial<1> :: value } ; "
+                                "enum Anonymous0 { value = ( int ) 2 * Factorial<1> :: value } ; "
                                 "} ; "
                                 "struct Factorial<1> { "
-                                "enum Anonymous0 { value = 1 * Factorial<0> :: value } ; "
+                                "enum Anonymous0 { value = ( int ) 1 * Factorial<0> :: value } ; "
                                 "} ;";
         ASSERT_EQUALS(expected, tok(code, dinit(CheckOptions, $.debugwarnings = true)));
         ASSERT_EQUALS("", errout_str());
@@ -1456,10 +1462,10 @@ private:
                            "int diagonalGroupTest<4> ( ) ; "
                            "int main ( ) { return diagonalGroupTest<4> ( ) ; } "
                            "int diagonalGroupTest<4> ( ) { return Factorial<4> :: value ; } "
-                           "struct Factorial<4> { enum FacHelper { value = 4 * Factorial<3> :: value } ; } ; "
-                           "struct Factorial<3> { enum FacHelper { value = 3 * Factorial<2> :: value } ; } ; "
-                           "struct Factorial<2> { enum FacHelper { value = 2 * Factorial<1> :: value } ; } ; "
-                           "struct Factorial<1> { enum FacHelper { value = 1 * Factorial<0> :: value } ; } ;";
+                           "struct Factorial<4> { enum FacHelper { value = ( int ) 4 * Factorial<3> :: value } ; } ; "
+                           "struct Factorial<3> { enum FacHelper { value = ( int ) 3 * Factorial<2> :: value } ; } ; "
+                           "struct Factorial<2> { enum FacHelper { value = ( int ) 2 * Factorial<1> :: value } ; } ; "
+                           "struct Factorial<1> { enum FacHelper { value = ( int ) 1 * Factorial<0> :: value } ; } ;";
         ASSERT_EQUALS(exp, tok(code));
     }
 
@@ -1555,11 +1561,11 @@ private:
                            "} ; "
                            "void A :: t_func<0> ( ) "
                            "{ "
-                           "if ( 0 != 0 || foo<int> ( ) ) { ; } "
+                           "if ( ( int ) 0 != 0 || foo<int> ( ) ) { ; } "
                            "} "
                            "void A :: t_func<1> ( ) "
                            "{ "
-                           "if ( 1 != 0 || foo<int> ( ) ) { ; } "
+                           "if ( ( int ) 1 != 0 || foo<int> ( ) ) { ; } "
                            "} "
                            "bool foo<int> ( ) { return true ; }";
         ASSERT_EQUALS(exp, tok(code));
@@ -3711,7 +3717,7 @@ private:
                                "class GenericConfigurationHandler<int,std::allocator,std::list> ; "
                                "class TargetConfigurationHandler : public GenericConfigurationHandler<int,std::allocator,std::list> { } ; "
                                "class GenericConfigurationHandler<int,std::allocator,std::list> { "
-                               "std :: list < int , std :: std :: allocator < int > > m_target_configurations ; "
+                               "std :: list < int , std :: allocator < int > > m_target_configurations ; "
                                "} ;";
             ASSERT_EQUALS(exp, tok(code));
         }
@@ -4593,6 +4599,53 @@ private:
         ASSERT_EQUALS(exp, tok(code));
     }
 
+    void template181() {
+        const char code[] = "struct K { bool b; };\n" // #13747
+                            "template<bool b>\n"
+                            "void f(struct K* k) {\n"
+                            "    assert(b == k->b);\n"
+                            "}\n"
+                            "void g(struct K* k) {\n"
+                            "    f<false>(k);\n"
+                            "}\n";
+        const char exp[] = "struct K { bool b ; } ; "
+                           "void f<false> ( struct K * k ) ; "
+                           "void g ( struct K * k ) { "
+                           "f<false> ( k ) ; "
+                           "} "
+                           "void f<false> ( struct K * k ) { "
+                           "assert ( false == k . b ) ; "
+                           "}";
+        ASSERT_EQUALS(exp, tok(code));
+
+        const char code2[] = "namespace N { bool b = false; }\n" // #13759
+                             "template<bool b>\n"
+                             "void f() {\n"
+                             "    assert(b == N::b);\n"
+                             "}\n"
+                             "void g() {\n"
+                             "    f<false>();\n"
+                             "}\n";
+        const char exp2[] = "namespace N { bool b ; b = false ; } "
+                            "void f<false> ( ) ; "
+                            "void g ( ) { "
+                            "f<false> ( ) ; "
+                            "} "
+                            "void f<false> ( ) { "
+                            "assert ( false == N :: b ) ; "
+                            "}";
+        ASSERT_EQUALS(exp2, tok(code2));
+    }
+
+    void template182() {
+        const char code[] = "template <class...>\n"
+                            "auto f() {\n"
+                            "    return [](auto&&...) {};\n"
+                            "}\n";
+        const char exp[] = "template < class ... > auto f ( ) { return [ ] ( auto && ... ) { } ; }";
+        ASSERT_EQUALS(exp, tok(code));
+    }
+
     void template_specialization_1() {  // #7868 - template specialization template <typename T> struct S<C<T>> {..};
         const char code[] = "template <typename T> struct C {};\n"
                             "template <typename T> struct S {a};\n"
@@ -4724,15 +4777,15 @@ private:
                                 "    A<int,(int)2> a1;\n"
                                 "    A<int> a2;\n"
                                 "}\n";
-            const char expected[] = "class A<int,(int)2> ; "
+            const char expected[] = "class A<int,2> ; "
                                     "class A<int,3> ; "
                                     "void f ( ) "
                                     "{ "
-                                    "A<int,(int)2> a1 ; "
+                                    "A<int,2> a1 ; "
                                     "A<int,3> a2 ; "
                                     "} "
-                                    "class A<int,(int)2> "
-                                    "{ int ar [ ( int ) 2 ] ; } ; "
+                                    "class A<int,2> "
+                                    "{ int ar [ 2 ] ; } ; "
                                     "class A<int,3> "
                                     "{ int ar [ 3 ] ; } ;";
             ASSERT_EQUALS(expected, tok(code));
@@ -5387,11 +5440,12 @@ private:
     }
 
     unsigned int templateParameters(const char code[]) {
-        Tokenizer tokenizer(settings, *this);
-
+        TokenList tokenlist{settings, Standards::Language::CPP};
         std::istringstream istr(code);
-        if (!tokenizer.list.createTokens(istr, "test.cpp"))
+        tokenlist.appendFileIfNew("test.cpp");
+        if (!tokenlist.createTokens(istr))
             return false;
+        Tokenizer tokenizer(std::move(tokenlist), *this);
         tokenizer.createLinks();
         tokenizer.splitTemplateRightAngleBrackets(false);
 
@@ -5455,11 +5509,13 @@ private:
 
     // Helper function to unit test TemplateSimplifier::getTemplateNamePosition
     int templateNamePositionHelper(const char code[], unsigned offset = 0) {
-        Tokenizer tokenizer(settings, *this);
+        TokenList tokenlist{settings, Standards::Language::CPP};
 
         std::istringstream istr(code);
-        if (!tokenizer.list.createTokens(istr, "test.cpp"))
+        tokenlist.appendFileIfNew("test.cpp");
+        if (!tokenlist.createTokens(istr))
             return false;
+        Tokenizer tokenizer(std::move(tokenlist), *this);
         tokenizer.createLinks();
         tokenizer.splitTemplateRightAngleBrackets(false);
 
@@ -5526,11 +5582,11 @@ private:
 
     // Helper function to unit test TemplateSimplifier::findTemplateDeclarationEnd
     bool findTemplateDeclarationEndHelper(const char code[], const char pattern[], unsigned offset = 0) {
-        Tokenizer tokenizer(settings, *this);
-
+        TokenList tokenlist{settings, Standards::Language::CPP};
         std::istringstream istr(code);
-        if (!tokenizer.list.createTokens(istr, "test.cpp"))
+        if (!TokenListHelper::createTokens(tokenlist, istr, "test.cpp"))
             return false;
+        Tokenizer tokenizer(std::move(tokenlist), *this);
         tokenizer.createLinks();
         tokenizer.splitTemplateRightAngleBrackets(false);
 
@@ -5556,11 +5612,12 @@ private:
 
     // Helper function to unit test TemplateSimplifier::getTemplateParametersInDeclaration
     bool getTemplateParametersInDeclarationHelper(const char code[], const std::vector<std::string> & params) {
-        Tokenizer tokenizer(settings, *this);
+        TokenList tokenlist{settings, Standards::Language::CPP};
 
         std::istringstream istr(code);
-        if (!tokenizer.list.createTokens(istr, "test.cpp"))
+        if (!TokenListHelper::createTokens(tokenlist, istr, "test.cpp"))
             return false;
+        Tokenizer tokenizer(std::move(tokenlist), *this);
         tokenizer.createLinks();
         tokenizer.splitTemplateRightAngleBrackets(false);
 
@@ -6266,7 +6323,7 @@ private:
                             "}";
         const char expected[] = "struct A<0> ; "
                                 "void bar ( ) { A<0> :: foo ( ) ; } "
-                                "struct A<0> { static void foo ( ) { int i ; i = 0 ; } } ;";
+                                "struct A<0> { static void foo ( ) { int i ; i = ( int ) 0 ; } } ;";
         ASSERT_EQUALS(expected, tok(code));
     }
 
@@ -6540,6 +6597,17 @@ private:
     void explicitBool2() {
         const char code[] = "class Fred { explicit(false) Fred(int); };";
         ASSERT_EQUALS("class Fred { Fred ( int ) ; } ;", tok(code));
+    }
+
+    void templateArgPreserveType() { // #13882 - type of template argument
+        const char code[] = "template <uint32_t x> class Test {\n"
+                            "    uint32_t i = x;\n"
+                            "};\n"
+                            "Test<64> test;\n";
+        ASSERT_EQUALS("class Test<64> ; "
+                      "Test<64> test ; "
+                      "class Test<64> { uint32_t i ; i = ( uint32_t ) 64 ; } ;",
+                      tok(code));
     }
 };
 

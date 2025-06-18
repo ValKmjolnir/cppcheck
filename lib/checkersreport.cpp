@@ -35,10 +35,12 @@ static bool isCppcheckPremium(const Settings& settings) {
 }
 
 static int getMisraCVersion(const Settings& settings) {
-    if (settings.premiumArgs.find("misra-c-2012") != std::string::npos)
-        return 2012;
+    if (settings.premiumArgs.find("misra-c-2025") != std::string::npos)
+        return 2025;
     if (settings.premiumArgs.find("misra-c-2023") != std::string::npos)
         return 2023;
+    if (settings.premiumArgs.find("misra-c-2012") != std::string::npos)
+        return 2012;
     if (settings.addons.count("misra"))
         return 2012;
     const bool misraAddonInfo = std::any_of(settings.addonInfos.cbegin(), settings.addonInfos.cend(), [](const AddonInfo& addonInfo) {
@@ -191,11 +193,11 @@ std::string CheckersReport::getReport(const std::string& criticalErrors) const
     const bool cppcheckPremium = isCppcheckPremium(mSettings);
 
     auto reportSection = [&fout, cppcheckPremium]
-                             (const std::string& title,
-                             const Settings& settings,
-                             const std::set<std::string>& activeCheckers,
-                             const std::map<std::string, std::string>& premiumCheckers,
-                             const std::string& substring) {
+                         (const std::string& title,
+                          const Settings& settings,
+                          const std::set<std::string>& activeCheckers,
+                          const std::map<std::string, std::string>& premiumCheckers,
+                          const std::string& substring) {
         fout << std::endl << std::endl;
         fout << title << std::endl;
         fout << std::string(title.size(), '-') << std::endl;

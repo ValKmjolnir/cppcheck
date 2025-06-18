@@ -106,7 +106,7 @@ void CheckNullPointer::parseFunctionCall(const Token &tok, std::list<const Token
                 percent = false;
 
                 bool _continue = false;
-                while (!std::isalpha((unsigned char)*i)) {
+                while (!std::isalpha(static_cast<unsigned char>(*i))) {
                     if (*i == '*') {
                         if (scan)
                             _continue = true;
@@ -474,11 +474,11 @@ void CheckNullPointer::nullPointerError(const Token *tok, const std::string &var
 
         std::string id = "nullPointer";
         if (value->unknownFunctionReturn == ValueFlow::Value::UnknownFunctionReturn::outOfMemory) {
-            errmsg = "If memory allocation fails, then there is a " + ((char)std::tolower(errmsg[0]) + errmsg.substr(1));
+            errmsg = "If memory allocation fails, then there is a " + (static_cast<char>(std::tolower(errmsg[0])) + errmsg.substr(1));
             id += "OutOfMemory";
         }
         else if (value->unknownFunctionReturn == ValueFlow::Value::UnknownFunctionReturn::outOfResources) {
-            errmsg = "If resource allocation fails, then there is a " + ((char)std::tolower(errmsg[0]) + errmsg.substr(1));
+            errmsg = "If resource allocation fails, then there is a " + (static_cast<char>(std::tolower(errmsg[0])) + errmsg.substr(1));
             id += "OutOfResources";
         }
 
@@ -553,11 +553,11 @@ void CheckNullPointer::pointerArithmeticError(const Token* tok, const ValueFlow:
 
     std::string id = "nullPointerArithmetic";
     if (value && value->unknownFunctionReturn == ValueFlow::Value::UnknownFunctionReturn::outOfMemory) {
-        errmsg = "If memory allocation fails: " + ((char)std::tolower(errmsg[0]) + errmsg.substr(1));
+        errmsg = "If memory allocation fails: " + (static_cast<char>(std::tolower(errmsg[0])) + errmsg.substr(1));
         id += "OutOfMemory";
     }
     else if (value && value->unknownFunctionReturn == ValueFlow::Value::UnknownFunctionReturn::outOfResources) {
-        errmsg = "If resource allocation fails: " + ((char)std::tolower(errmsg[0]) + errmsg.substr(1));
+        errmsg = "If resource allocation fails: " + (static_cast<char>(std::tolower(errmsg[0])) + errmsg.substr(1));
         id += "OutOfResources";
     }
 
@@ -693,7 +693,7 @@ bool CheckNullPointer::analyseWholeProgram(const CTU::FileInfo &ctu, const std::
                                           fi->file0,
                                           warning ? Severity::warning : Severity::error,
                                           message,
-                                          id,
+                                          std::move(id),
                                           CWE_NULL_POINTER_DEREFERENCE, Certainty::normal);
                 errorLogger.reportErr(errmsg);
 

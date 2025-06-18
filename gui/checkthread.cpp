@@ -90,7 +90,10 @@ int CheckThread::executeCommand(std::string exe, std::vector<std::string> args, 
     }
 
     process.start(e, args2);
-    process.waitForFinished();
+    while (!Settings::terminated() && !process.waitForFinished(1000)) {
+        if (process.state() == QProcess::ProcessState::NotRunning)
+            break;
+    }
 
     if (redirect == "2>&1") {
         QString s1 = process.readAllStandardOutput();
@@ -151,7 +154,7 @@ void CheckThread::run()
     QString file = mResult.getNextFile();
     while (!file.isEmpty() && mState == Running) {
         qDebug() << "Checking file" << file;
-        cppcheck.check(FileWithDetails(file.toStdString()));
+        cppcheck.check(FileWithDetails(file.toStdString(), Path::identify(file.toStdString(), mSettings.cppHeaderProbe), 0));
         runAddonsAndTools(mSettings, nullptr, file);
         emit fileChecked(file);
 
@@ -242,7 +245,7 @@ void CheckThread::runAddonsAndTools(const Settings& settings, const FileSettings
 
             const std::string &buildDir = settings.buildDir;
             if (!buildDir.empty()) {
-                analyzerInfoFile = QString::fromStdString(AnalyzerInformation::getAnalyzerInfoFile(buildDir, fileSettings->filename(), fileSettings->cfg));
+                analyzerInfoFile = QString::fromStdString(AnalyzerInformation::getAnalyzerInfoFile(buildDir, fileSettings->filename(), fileSettings->cfg, fileSettings->fileIndex));
 
                 QStringList args2(args);
                 args2.insert(0,"-E");
@@ -440,8 +443,8 @@ void CheckThread::parseClangErrors(const QString &tool, const QString &file0, QS
 
 bool CheckThread::isSuppressed(const SuppressionList::ErrorMessage &errorMessage) const
 {
-    return std::any_of(mSuppressionsUi.cbegin(), mSuppressionsUi.cend(), [&](const SuppressionList::Suppression& s) {
-        return s.isSuppressed(errorMessage);
+    return std::any_of(mSuppressionsUi.cbegin(), mSuppressionsUi.cend(), [&](const SuppressionList::Suppression& s) -> bool {
+        return s.isSuppressed(errorMessage) == SuppressionList::Suppression::Result::Matched;
     });
 }
 

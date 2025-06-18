@@ -16,12 +16,19 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "errorlogger.h"
+#include "errortypes.h"
 #include "executor.h"
 #include "filesettings.h"
 #include "fixture.h"
+#include "helpers.h"
+#include "settings.h"
 #include "suppressions.h"
 
+#include <list>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 class DummyExecutor : public Executor
 {
@@ -51,11 +58,11 @@ private:
     }
 
     void hasToLogSimple() {
-        const std::list<FileWithDetails> files{FileWithDetails{"test.c"}};
+        const std::list<FileWithDetails> files{FileWithDetails{"test.c", Standards::Language::C, 0}};
         const std::list<FileSettings> fileSettings;
-        Settings settings;
         // this is the "simple" format
-        settings.templateFormat = "{file}:{line}:{column}: {severity}:{inconclusive:inconclusive:} {message} [{id}]";
+        const auto settings = dinit(Settings,
+                                    $.templateFormat = "{file}:{line}:{column}: {severity}:{inconclusive:inconclusive:} {message} [{id}]");
         Suppressions supprs;
         DummyExecutor executor(files, fileSettings, settings, supprs, *this);
 

@@ -290,6 +290,44 @@ void CheckOther::suspiciousSemicolonError(const Token* tok)
                 "Suspicious use of ; at the end of '" + (tok ? tok->str() : std::string()) + "' statement.", CWE398, Certainty::normal);
 }
 
+/** @brief would it make sense to use dynamic_cast instead of C style cast? */
+static bool isDangerousTypeConversion(const Token* const tok)
+{
+    const Token* from = tok->astOperand1();
+    if (!from)
+        return false;
+    if (!tok->valueType() || !from->valueType())
+        return false;
+    if (tok->valueType()->typeScope != nullptr &&
+        tok->valueType()->typeScope == from->valueType()->typeScope)
+        return false;
+    if (tok->valueType()->type == from->valueType()->type &&
+        tok->valueType()->isPrimitive())
+        return false;
+    // cast from derived object to base object is safe..
+    if (tok->valueType()->typeScope && from->valueType()->typeScope) {
+        const Type* fromType = from->valueType()->typeScope->definedType;
+        const Type* toType = tok->valueType()->typeScope->definedType;
+        if (fromType && toType && fromType->isDerivedFrom(toType->name()))
+            return false;
+    }
+    const bool refcast = (tok->valueType()->reference != Reference::None);
+    if (!refcast && tok->valueType()->pointer == 0)
+        return false;
+    if (!refcast && from->valueType()->pointer == 0)
+        return false;
+
+    if (tok->valueType()->type == ValueType::Type::VOID || from->valueType()->type == ValueType::Type::VOID)
+        return false;
+    if (tok->valueType()->pointer == 0 && tok->valueType()->isIntegral())
+        // ok: (uintptr_t)ptr;
+        return false;
+    if (from->valueType()->pointer == 0 && from->valueType()->isIntegral())
+        // ok: (int *)addr;
+        return false;
+
+    return true;
+}
 
 //---------------------------------------------------------------------------
 // For C++ code, warn if C-style casts are used on pointer types
@@ -314,8 +352,11 @@ void CheckOther::warningOldStylePointerCast()
             tok = scope->bodyStart;
         for (; tok && tok != scope->bodyEnd; tok = tok->next()) {
             // Old style pointer casting..
-            if (tok->str() != "(")
+            if (!tok->isCast() || tok->isBinaryOp())
                 continue;
+            if (isDangerousTypeConversion(tok))
+                continue;
+            const Token* const errtok = tok;
             const Token* castTok = tok->next();
             while (Token::Match(castTok, "const|volatile|class|struct|union|%type%|::")) {
                 castTok = castTok->next();
@@ -332,7 +373,7 @@ void CheckOther::warningOldStylePointerCast()
                     isRef = true;
                 castTok = castTok->next();
             }
-            if ((!isPtr && !isRef) || !Token::Match(castTok, ") (| %name%|%num%|%bool%|%char%|%str%|&"))
+            if ((!isPtr && !isRef) || !Token::Match(castTok, ") (| %name%|%bool%|%char%|%str%|&"))
                 continue;
 
             if (Token::Match(tok->previous(), "%type%"))
@@ -351,7 +392,7 @@ void CheckOther::warningOldStylePointerCast()
                 continue;
 
             if (typeTok->tokType() == Token::eType || typeTok->tokType() == Token::eName)
-                cstyleCastError(tok, isPtr);
+                cstyleCastError(errtok, isPtr);
         }
     }
 }
@@ -365,6 +406,79 @@ void CheckOther::cstyleCastError(const Token *tok, bool isPtr)
                 "static_cast, const_cast, dynamic_cast and reinterpret_cast. A C-style cast could evaluate to "
                 "any of those automatically, thus it is considered safer if the programmer explicitly states "
                 "which kind of cast is expected.", CWE398, Certainty::normal);
+}
+
+void CheckOther::warningDangerousTypeCast()
+{
+    // Only valid on C++ code
+    if (!mTokenizer->isCPP())
+        return;
+    if (!mSettings->severity.isEnabled(Severity::warning) && !mSettings->isPremiumEnabled("cstyleCast"))
+        return;
+
+    logChecker("CheckOther::warningDangerousTypeCast"); // warning,c++
+
+    const SymbolDatabase *symbolDatabase = mTokenizer->getSymbolDatabase();
+    for (const Scope * scope : symbolDatabase->functionScopes) {
+        const Token* tok;
+        if (scope->function && scope->function->isConstructor())
+            tok = scope->classDef;
+        else
+            tok = scope->bodyStart;
+        for (; tok && tok != scope->bodyEnd; tok = tok->next()) {
+            // Old style pointer casting..
+            if (!tok->isCast() || tok->isBinaryOp())
+                continue;
+
+            if (isDangerousTypeConversion(tok))
+                dangerousTypeCastError(tok, tok->valueType()->pointer > 0);
+        }
+    }
+}
+
+void CheckOther::dangerousTypeCastError(const Token *tok, bool isPtr)
+{
+    //const std::string type = isPtr ? "pointer" : "reference";
+    (void)isPtr;
+    reportError(tok, Severity::warning, "dangerousTypeCast",
+                "Potentially invalid type conversion in old-style C cast, clarify/fix with C++ cast",
+                CWE398, Certainty::normal);
+}
+
+void CheckOther::warningIntToPointerCast()
+{
+    if (!mSettings->severity.isEnabled(Severity::portability) && !mSettings->isPremiumEnabled("cstyleCast"))
+        return;
+
+    logChecker("CheckOther::warningIntToPointerCast"); // portability
+
+    for (const Token* tok = mTokenizer->tokens(); tok; tok = tok->next()) {
+        // pointer casting..
+        if (!tok->isCast())
+            continue;
+        const Token* from = tok->astOperand2() ? tok->astOperand2() : tok->astOperand1();
+        if (!from || !from->isNumber())
+            continue;
+        if (!tok->valueType() || tok->valueType()->pointer == 0)
+            continue;
+        if (!MathLib::isIntHex(from->str()) && from->hasKnownIntValue() && from->getKnownIntValue() != 0) {
+            std::string format;
+            if (MathLib::isDec(from->str()))
+                format = "decimal";
+            else if (MathLib::isOct(from->str()))
+                format = "octal";
+            else
+                continue;
+            intToPointerCastError(tok, format);
+        }
+    }
+}
+
+void CheckOther::intToPointerCastError(const Token *tok, const std::string& format)
+{
+    reportError(tok, Severity::portability, "intToPointerCast",
+                "Casting non-zero " + format + " integer literal to pointer.",
+                CWE398, Certainty::normal);
 }
 
 void CheckOther::suspiciousFloatingPointCast()
@@ -760,13 +874,13 @@ void CheckOther::redundantBitwiseOperationInSwitchError()
             //    case 4: b = b | 1;
             else if (Token::Match(tok2->previous(), ";|{|}|: %var% = %name% %or%|& %num% ;") &&
                      tok2->varId() == tok2->tokAt(2)->varId()) {
-                const std::string bitOp = tok2->strAt(3) + tok2->strAt(4);
+                std::string bitOp = tok2->strAt(3) + tok2->strAt(4);
                 const auto i2 = utils::as_const(varsWithBitsSet).find(tok2->varId());
 
                 // This variable has not had a bit operation performed on it yet, so just make a note of it
                 if (i2 == varsWithBitsSet.end()) {
                     varsWithBitsSet[tok2->varId()] = tok2;
-                    bitOperations[tok2->varId()] = bitOp;
+                    bitOperations[tok2->varId()] = std::move(bitOp);
                 }
 
                 // The same bit operation has been performed on the same variable twice, so report an error
@@ -1093,6 +1207,9 @@ void CheckOther::checkVariableScope()
 
         if (var->nameToken()->isExpandedMacro())
             continue;
+        if (isStructuredBindingVariable(var) && // warn for single decomposition
+            !(Token::simpleMatch(var->nameToken()->astParent(), "[") && var->nameToken()->astParent()->astOperand2() == var->nameToken()))
+            continue;
 
         const bool isPtrOrRef = var->isPointer() || var->isReference();
         const bool isSimpleType = var->typeStartToken()->isStandardType() || var->typeStartToken()->isEnumType() || (var->typeStartToken()->isC() && var->type() && var->type()->isStructType());
@@ -1405,7 +1522,7 @@ static bool isLargeContainer(const Variable* var, const Settings& settings)
         return false;
     }
     const ValueType vtElem = ValueType::parseDecl(vt->containerTypeToken, settings);
-    const auto elemSize = std::max<std::size_t>(ValueFlow::getSizeOf(vtElem, settings), 1);
+    const auto elemSize = std::max<std::size_t>(ValueFlow::getSizeOf(vtElem, settings, ValueFlow::Accuracy::LowerBound), 1);
     const auto arraySize = var->dimension(0) * elemSize;
     return arraySize > maxByValueSize;
 }
@@ -1445,7 +1562,7 @@ void CheckOther::checkPassByReference()
                 // Ensure that it is a large object.
                 if (!var->type()->classScope)
                     inconclusive = true;
-                else if (!var->valueType() || ValueFlow::getSizeOf(*var->valueType(), *mSettings) <= 2 * mSettings->platform.sizeof_pointer)
+                else if (!var->valueType() || ValueFlow::getSizeOf(*var->valueType(), *mSettings, ValueFlow::Accuracy::LowerBound) <= 2 * mSettings->platform.sizeof_pointer)
                     continue;
             }
             else
@@ -2022,7 +2139,7 @@ static bool isConstant(const Token* tok) {
     return tok && (tok->isEnumerator() || Token::Match(tok, "%bool%|%num%|%str%|%char%|nullptr|NULL"));
 }
 
-static bool isConstStatement(const Token *tok, bool isNestedBracket = false)
+static bool isConstStatement(const Token *tok, const Library& library, bool isNestedBracket = false)
 {
     if (!tok)
         return false;
@@ -2044,7 +2161,7 @@ static bool isConstStatement(const Token *tok, bool isNestedBracket = false)
         tok2 = tok2->astParent();
     }
     if (Token::Match(tok, "&&|%oror%"))
-        return isConstStatement(tok->astOperand1()) && isConstStatement(tok->astOperand2());
+        return isConstStatement(tok->astOperand1(), library) && isConstStatement(tok->astOperand2(), library);
     if (Token::Match(tok, "!|~|%cop%") && (tok->astOperand1() || tok->astOperand2()))
         return true;
     if (Token::simpleMatch(tok->previous(), "sizeof ("))
@@ -2052,15 +2169,15 @@ static bool isConstStatement(const Token *tok, bool isNestedBracket = false)
     if (isCPPCast(tok)) {
         if (Token::simpleMatch(tok->astOperand1(), "dynamic_cast") && Token::simpleMatch(tok->astOperand1()->linkAt(1)->previous(), "& >"))
             return false;
-        return isWithoutSideEffects(tok) && isConstStatement(tok->astOperand2());
+        return isWithoutSideEffects(tok) && isConstStatement(tok->astOperand2(), library);
     }
     if (tok->isCast() && tok->next() && tok->next()->isStandardType())
-        return isWithoutSideEffects(tok->astOperand1()) && isConstStatement(tok->astOperand1());
+        return isWithoutSideEffects(tok->astOperand1()) && isConstStatement(tok->astOperand1(), library);
     if (Token::simpleMatch(tok, "."))
-        return isConstStatement(tok->astOperand2());
+        return isConstStatement(tok->astOperand2(), library);
     if (Token::simpleMatch(tok, ",")) {
         if (tok->astParent()) // warn about const statement on rhs at the top level
-            return isConstStatement(tok->astOperand1()) && isConstStatement(tok->astOperand2());
+            return isConstStatement(tok->astOperand1(), library) && isConstStatement(tok->astOperand2(), library);
 
         const Token* lml = previousBeforeAstLeftmostLeaf(tok); // don't warn about matrix/vector assignment (e.g. Eigen)
         if (lml)
@@ -2068,21 +2185,36 @@ static bool isConstStatement(const Token *tok, bool isNestedBracket = false)
         const Token* stream = lml;
         while (stream && Token::Match(stream->astParent(), ".|[|(|*"))
             stream = stream->astParent();
-        return (!stream || !isLikelyStream(stream)) && isConstStatement(tok->astOperand2());
+        return (!stream || !isLikelyStream(stream)) && isConstStatement(tok->astOperand2(), library);
     }
     if (Token::simpleMatch(tok, "?") && Token::simpleMatch(tok->astOperand2(), ":")) // ternary operator
-        return isConstStatement(tok->astOperand1()) && isConstStatement(tok->astOperand2()->astOperand1()) && isConstStatement(tok->astOperand2()->astOperand2());
+        return isConstStatement(tok->astOperand1(), library) && isConstStatement(tok->astOperand2()->astOperand1(), library) && isConstStatement(tok->astOperand2()->astOperand2(), library);
     if (isBracketAccess(tok) && isWithoutSideEffects(tok->astOperand1(), /*checkArrayAccess*/ true, /*checkReference*/ false)) {
         const bool isChained = succeeds(tok->astParent(), tok);
         if (Token::simpleMatch(tok->astParent(), "[")) {
             if (isChained)
-                return isConstStatement(tok->astOperand2()) && isConstStatement(tok->astParent());
-            return isNestedBracket && isConstStatement(tok->astOperand2());
+                return isConstStatement(tok->astOperand2(), library) && isConstStatement(tok->astParent(), library);
+            return isNestedBracket && isConstStatement(tok->astOperand2(), library);
         }
-        return isConstStatement(tok->astOperand2(), /*isNestedBracket*/ !isChained);
+        return isConstStatement(tok->astOperand2(), library, /*isNestedBracket*/ !isChained);
     }
     if (!tok->astParent() && findLambdaEndToken(tok))
         return true;
+
+    tok2 = tok;
+    if (tok2->str() == "::")
+        tok2 = tok2->next();
+    if (Token::Match(tok2, "%name% ;")) {
+        if (tok2->function())
+            return true;
+        std::string funcStr = tok2->str();
+        while (tok2->index() > 1 && Token::Match(tok2->tokAt(-2), "%name% ::")) {
+            funcStr.insert(0, tok2->strAt(-2) + "::");
+            tok2 = tok2->tokAt(-2);
+        }
+        if (library.functions().count(funcStr) > 0)
+            return true;
+    }
     return false;
 }
 
@@ -2174,7 +2306,7 @@ void CheckOther::checkIncompleteStatement()
         // Skip statement expressions
         if (Token::simpleMatch(rtok, "; } )"))
             continue;
-        if (!isConstStatement(tok))
+        if (!isConstStatement(tok, mSettings->library))
             continue;
         if (isVoidStmt(tok))
             continue;
@@ -2228,6 +2360,8 @@ void CheckOther::constStatementError(const Token *tok, const std::string &type, 
         msg = "Redundant code: Found unused array access.";
     else if (tok->str() == "[" && !tok->astParent())
         msg = "Redundant code: Found unused lambda.";
+    else if (Token::Match(tok, "%name%|::"))
+        msg = "Redundant code: Found unused function.";
     else if (mSettings->debugwarnings) {
         reportError(tok, Severity::debug, "debug", "constStatementError not handled.");
         return;
@@ -2365,7 +2499,7 @@ void CheckOther::checkMisusedScopedObject()
                 if (Token::simpleMatch(parTok, "<") && parTok->link())
                     parTok = parTok->link()->next();
                 if (const Token* arg = parTok->astOperand2()) {
-                    if (!isConstStatement(arg))
+                    if (!isConstStatement(arg, mSettings->library))
                         continue;
                     if (parTok->str() == "(") {
                         if (arg->varId() && !(arg->variable() && arg->variable()->nameToken() != arg))
@@ -2826,7 +2960,7 @@ void CheckOther::checkDuplicateExpression()
             } else if (tok->astOperand1() && tok->astOperand2() && tok->str() == ":" && tok->astParent() && tok->astParent()->str() == "?") {
                 if (!tok->astOperand1()->values().empty() && !tok->astOperand2()->values().empty() && isEqualKnownValue(tok->astOperand1(), tok->astOperand2()) &&
                     !isVariableChanged(tok->astParent(), /*indirect*/ 0, *mSettings) &&
-                    isConstStatement(tok->astOperand1()) && isConstStatement(tok->astOperand2()))
+                    isConstStatement(tok->astOperand1(), mSettings->library) && isConstStatement(tok->astOperand2(), mSettings->library))
                     duplicateValueTernaryError(tok);
                 else if (isSameExpression(true, tok->astOperand1(), tok->astOperand2(), *mSettings, false, true, &errorPath))
                     duplicateExpressionTernaryError(tok, std::move(errorPath));
@@ -3149,7 +3283,7 @@ void CheckOther::checkRedundantCopy()
                 const Token* varTok = fScope->bodyEnd->tokAt(-2);
                 if (varTok->variable() && !varTok->variable()->isGlobal() &&
                     (!varTok->variable()->type() || !varTok->variable()->type()->classScope ||
-                     (varTok->variable()->valueType() && ValueFlow::getSizeOf(*varTok->variable()->valueType(), *mSettings) > 2 * mSettings->platform.sizeof_pointer)))
+                     (varTok->variable()->valueType() && ValueFlow::getSizeOf(*varTok->variable()->valueType(), *mSettings, ValueFlow::Accuracy::LowerBound) > 2 * mSettings->platform.sizeof_pointer)))
                     redundantCopyError(startTok, startTok->str());
             }
         }
@@ -3269,7 +3403,7 @@ void CheckOther::checkIncompleteArrayFill()
                 if (size == 0 && var->valueType()->pointer)
                     size = mSettings->platform.sizeof_pointer;
                 else if (size == 0 && var->valueType())
-                    size = ValueFlow::getSizeOf(*var->valueType(), *mSettings);
+                    size = ValueFlow::getSizeOf(*var->valueType(), *mSettings, ValueFlow::Accuracy::LowerBound);
                 const Token* tok3 = tok->next()->astOperand2()->astOperand1()->astOperand1();
                 if ((size != 1 && size != 100 && size != 0) || var->isPointer()) {
                     if (printWarning)
@@ -3919,7 +4053,8 @@ void CheckOther::checkShadowVariables()
                 continue;
             if (scope.type == ScopeType::eFunction && scope.className == var.name())
                 continue;
-            if (functionScope->functionOf && functionScope->functionOf->isClassOrStructOrUnion() && functionScope->function && functionScope->function->isStatic() &&
+            if (functionScope->functionOf && functionScope->functionOf->isClassOrStructOrUnion() && functionScope->function &&
+                (functionScope->function->isStatic() || functionScope->function->isFriend()) &&
                 shadowed->variable() && !shadowed->variable()->isLocal())
                 continue;
             shadowError(var.nameToken(), shadowed, (shadowed->varId() != 0) ? "variable" : "function");
@@ -4211,7 +4346,7 @@ static bool getBufAndOffset(const Token *expr, const Token *&buf, MathLib::bigin
         bufToken = expr->astOperand1()->astOperand1();
         offsetToken = expr->astOperand1()->astOperand2();
         if (expr->astOperand1()->valueType())
-            elementSize =  ValueFlow::getSizeOf(*expr->astOperand1()->valueType(), settings);
+            elementSize =  ValueFlow::getSizeOf(*expr->astOperand1()->valueType(), settings, ValueFlow::Accuracy::LowerBound);
     } else if (Token::Match(expr, "+|-") && expr->isBinaryOp()) {
         const bool pointer1 = (expr->astOperand1()->valueType() && expr->astOperand1()->valueType()->pointer > 0);
         const bool pointer2 = (expr->astOperand2()->valueType() && expr->astOperand2()->valueType()->pointer > 0);
@@ -4220,13 +4355,13 @@ static bool getBufAndOffset(const Token *expr, const Token *&buf, MathLib::bigin
             offsetToken = expr->astOperand2();
             auto vt = *expr->astOperand1()->valueType();
             --vt.pointer;
-            elementSize = ValueFlow::getSizeOf(vt, settings);
+            elementSize = ValueFlow::getSizeOf(vt, settings, ValueFlow::Accuracy::LowerBound);
         } else if (!pointer1 && pointer2) {
             bufToken = expr->astOperand2();
             offsetToken = expr->astOperand1();
             auto vt = *expr->astOperand2()->valueType();
             --vt.pointer;
-            elementSize = ValueFlow::getSizeOf(vt, settings);
+            elementSize = ValueFlow::getSizeOf(vt, settings, ValueFlow::Accuracy::LowerBound);
         } else {
             return false;
         }
@@ -4235,7 +4370,7 @@ static bool getBufAndOffset(const Token *expr, const Token *&buf, MathLib::bigin
         *offset = 0;
         auto vt = *expr->valueType();
         --vt.pointer;
-        elementSize = ValueFlow::getSizeOf(vt, settings);
+        elementSize = ValueFlow::getSizeOf(vt, settings, ValueFlow::Accuracy::LowerBound);
         if (elementSize > 0) {
             *offset *= elementSize;
             if (sizeValue)
@@ -4373,6 +4508,8 @@ void CheckOther::runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger)
 
     // Checks
     checkOther.warningOldStylePointerCast();
+    checkOther.warningDangerousTypeCast();
+    checkOther.warningIntToPointerCast();
     checkOther.suspiciousFloatingPointCast();
     checkOther.invalidPointerCast();
     checkOther.checkCharVariable();
@@ -4439,6 +4576,8 @@ void CheckOther::getErrorMessages(ErrorLogger *errorLogger, const Settings *sett
     c.checkComparisonFunctionIsAlwaysTrueOrFalseError(nullptr, "isless","varName",false);
     c.checkCastIntToCharAndBackError(nullptr, "func_name");
     c.cstyleCastError(nullptr);
+    c.dangerousTypeCastError(nullptr, true);
+    c.intToPointerCastError(nullptr, "decimal");
     c.suspiciousFloatingPointCastError(nullptr);
     c.passedByValueError(nullptr, false);
     c.constVariableError(nullptr, nullptr);

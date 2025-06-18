@@ -204,6 +204,8 @@ private:
         TEST_CASE(exitcodeSuppressionsOld);
         TEST_CASE(exitcodeSuppressions);
         TEST_CASE(exitcodeSuppressionsNoFile);
+        TEST_CASE(fileFilterFileWithDetailsSimplifiedPath);
+        TEST_CASE(fileFilterFileWithDetailsCase);
         TEST_CASE(fileFilterStdin);
         TEST_CASE(fileList);
         TEST_CASE(fileListNoFile);
@@ -232,11 +234,13 @@ private:
         TEST_CASE(premiumOptions3);
         TEST_CASE(premiumOptions4);
         TEST_CASE(premiumOptions5);
+        TEST_CASE(premiumOptionsMetrics);
         TEST_CASE(premiumOptionsCertCIntPrecision);
         TEST_CASE(premiumOptionsLicenseFile);
         TEST_CASE(premiumOptionsInvalid1);
         TEST_CASE(premiumOptionsInvalid2);
         TEST_CASE(premiumSafety);
+        TEST_CASE(premiumDebugProgress);
         TEST_CASE(reportProgress1);
         TEST_CASE(reportProgress2);
         TEST_CASE(reportProgress3);
@@ -324,7 +328,7 @@ private:
         TEST_CASE(exceptionhandlingNotSupported2);
 #endif
         TEST_CASE(clang);
-        TEST_CASE(clang2);
+        TEST_CASE(clangCustom);
         TEST_CASE(clangInvalid);
         TEST_CASE(valueFlowMaxIterations);
         TEST_CASE(valueFlowMaxIterations2);
@@ -448,6 +452,16 @@ private:
         TEST_CASE(checkUnusedTemplates);
         TEST_CASE(noCheckUnusedTemplates);
         TEST_CASE(noCheckUnusedTemplates);
+        TEST_CASE(clangTidy);
+        TEST_CASE(clangTidyCustom);
+        TEST_CASE(projectConfigurationNoProject);
+        TEST_CASE(projectConfigurationEmpty);
+        TEST_CASE(analyzeAllVsConfigs);
+        TEST_CASE(noAnalyzeAllVsConfigs);
+        TEST_CASE(noAnalyzeAllVsConfigs2);
+        TEST_CASE(debugSymdb);
+        TEST_CASE(debugAst);
+        TEST_CASE(debugValueflow);
 
         TEST_CASE(ignorepaths1);
         TEST_CASE(ignorepaths2);
@@ -585,7 +599,7 @@ private:
         REDIRECT;
         const char * const argv[] = {"cppcheck", "file.cpp"};
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
-        ASSERT_EQUALS(1, (int)parser->getPathNames().size());
+        ASSERT_EQUALS(1, parser->getPathNames().size());
         ASSERT_EQUALS("file.cpp", parser->getPathNames().at(0));
     }
 
@@ -593,7 +607,7 @@ private:
         REDIRECT;
         const char * const argv[] = {"cppcheck", "src"};
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
-        ASSERT_EQUALS(1, (int)parser->getPathNames().size());
+        ASSERT_EQUALS(1, parser->getPathNames().size());
         ASSERT_EQUALS("src", parser->getPathNames().at(0));
     }
 
@@ -601,7 +615,7 @@ private:
         REDIRECT;
         const char * const argv[] = {"cppcheck", "-v"};
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Fail, parseFromArgs(argv));
-        ASSERT_EQUALS(0, (int)parser->getPathNames().size());
+        ASSERT_EQUALS(0, parser->getPathNames().size());
         ASSERT_EQUALS("cppcheck: error: no C or C++ source files found.\n", logger->str());
     }
 
@@ -1174,6 +1188,26 @@ private:
         ASSERT_EQUALS("cppcheck: error: unrecognized command line option: \"--exitcode-suppressions\".\n", logger->str());
     }
 
+    void fileFilterFileWithDetailsSimplifiedPath() const {
+        // match against simplified path
+        const std::vector<std::string> fileFilters{"m1.c"};
+        const std::list<FileWithDetails> filesResolved{ FileWithDetails("./m1.c", Standards::Language::C, 123) };
+        const std::list<FileWithDetails> files = CmdLineParser::filterFiles(fileFilters, filesResolved);
+        ASSERT_EQUALS(1U, files.size());
+    }
+
+    void fileFilterFileWithDetailsCase() {
+        // in windows, paths are case insensitive
+        const std::vector<std::string> fileFilters{"m1.c"};
+        const std::list<FileWithDetails> filesResolved{ FileWithDetails("M1.C", Standards::Language::C, 123) };
+        const std::list<FileWithDetails> files = CmdLineParser::filterFiles(fileFilters, filesResolved);
+#ifdef _WIN32
+        ASSERT_EQUALS(1U, files.size());
+#else
+        ASSERT_EQUALS(0U, files.size());
+#endif
+    }
+
     void fileFilterStdin() {
         REDIRECT;
         RedirectInput input("file1.c\nfile2.cpp\n");
@@ -1404,6 +1438,17 @@ private:
         ASSERT_EQUALS(false, settings->severity.isEnabled(Severity::warning));
     }
 
+    void premiumOptionsMetrics() {
+        REDIRECT;
+        asPremium();
+        const char * const argv[] = {"cppcheck", "--premium=metrics", "file.c"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
+        ASSERT_EQUALS("--metrics", settings->premiumArgs);
+        ASSERT(settings->severity.isEnabled(Severity::error));
+        ASSERT_EQUALS(false, settings->severity.isEnabled(Severity::warning));
+        ASSERT_EQUALS(false, settings->severity.isEnabled(Severity::portability));
+    }
+
     void premiumOptionsCertCIntPrecision() {
         REDIRECT;
         asPremium();
@@ -1442,6 +1487,14 @@ private:
         const char * const argv[] = {"cppcheck", "--premium=safety", "file.cpp"};
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
         ASSERT_EQUALS(true, settings->safety);
+    }
+
+    void premiumDebugProgress() {
+        REDIRECT;
+        asPremium();
+        const char * const argv[] = {"cppcheck", "--premium=debug-progress", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
+        ASSERT_EQUALS("--debug-progress", settings->premiumArgs);
     }
 
     void reportProgress1() {
@@ -1623,6 +1676,7 @@ private:
         ASSERT(settings->platform.set(Platform::Type::Unspecified));
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
         ASSERT_EQUALS(Platform::Type::Unix32, settings->platform.type);
+        ASSERT_EQUALS("cppcheck: The platform 'unix32-unsigned' has been deprecated and will be removed in Cppcheck 2.19. Please use '--platform=unix32 --funsigned-char' instead\n", logger->str());
     }
 
     void platformUnix64() {
@@ -1639,6 +1693,7 @@ private:
         ASSERT(settings->platform.set(Platform::Type::Unspecified));
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
         ASSERT_EQUALS(Platform::Type::Unix64, settings->platform.type);
+        ASSERT_EQUALS("cppcheck: The platform 'unix64-unsigned' has been deprecated and will be removed in Cppcheck 2.19. Please use '--platform=unix64 --funsigned-char' instead\n", logger->str());
     }
 
     void platformNative() {
@@ -2111,7 +2166,7 @@ private:
         ASSERT_EQUALS("clang", settings->clangExecutable);
     }
 
-    void clang2() {
+    void clangCustom() {
         REDIRECT;
         const char * const argv[] = {"cppcheck", "--clang=clang-14", "file.cpp"};
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
@@ -3046,6 +3101,78 @@ private:
         const char * const argv[] = {"cppcheck", "--check-unused-templates", "--no-check-unused-templates", "file.cpp"};
         ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parser->parseFromArgs(4, argv));
         ASSERT_EQUALS(false, settings->checkUnusedTemplates);
+    }
+
+    void clangTidy() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--clang-tidy", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parser->parseFromArgs(3, argv));
+        ASSERT(settings->clangTidy);
+        ASSERT_EQUALS("clang-tidy", settings->clangTidyExecutable);
+    }
+
+    void clangTidyCustom() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--clang-tidy=clang-tidy-14", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parser->parseFromArgs(3, argv));
+        ASSERT(settings->clangTidy);
+        ASSERT_EQUALS("clang-tidy-14", settings->clangTidyExecutable);
+    }
+
+    void projectConfigurationNoProject() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--project-configuration=Debug|Win32", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Fail, parseFromArgs(argv));
+        ASSERT_EQUALS("cppcheck: error: --project-configuration has no effect - no Visual Studio project provided.\n", logger->str());
+    }
+
+    void projectConfigurationEmpty() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--project-configuration=", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Fail, parseFromArgs(argv));
+        ASSERT_EQUALS("cppcheck: error: --project-configuration parameter is empty.\n", logger->str());
+    }
+
+    void analyzeAllVsConfigs() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--analyze-all-vs-configs", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
+        ASSERT_EQUALS(true, settings->analyzeAllVsConfigs);
+    }
+
+    void noAnalyzeAllVsConfigs() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--no-analyze-all-vs-configs", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Fail, parseFromArgs(argv));
+        ASSERT_EQUALS("cppcheck: error: --no-analyze-all-vs-configs has no effect - no Visual Studio project provided.\n", logger->str());
+    }
+
+    void noAnalyzeAllVsConfigs2() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--analyze-all-vs-configs", "--no-analyze-all-vs-configs", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Fail, parseFromArgs(argv));
+        ASSERT_EQUALS("cppcheck: error: --no-analyze-all-vs-configs has no effect - no Visual Studio project provided.\n", logger->str());
+    }
+
+    void debugSymdb() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--debug-symdb", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
+        ASSERT_EQUALS(true, settings->debugsymdb);
+    }
+
+    void debugAst() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--debug-ast", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
+        ASSERT_EQUALS(true, settings->debugast);
+    }
+
+    void debugValueflow() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--debug-valueflow", "file.cpp"};
+        ASSERT_EQUALS_ENUM(CmdLineParser::Result::Success, parseFromArgs(argv));
+        ASSERT_EQUALS(true, settings->debugvalueflow);
     }
 
     void ignorepaths1() {

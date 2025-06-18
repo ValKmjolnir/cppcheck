@@ -57,12 +57,8 @@ public:
      */
     class CPPCHECKLIB WARN_UNUSED FileLocation {
     public:
-        FileLocation(const std::string &file, int line, unsigned int column)
-            : fileIndex(0), line(line), column(column), mOrigFileName(file), mFileName(file) {}
-
-        FileLocation(const std::string &file, std::string info, int line, unsigned int column)
-            : fileIndex(0), line(line), column(column), mOrigFileName(file), mFileName(file), mInfo(std::move(info)) {}
-
+        FileLocation(const std::string &file, int line, unsigned int column);
+        FileLocation(const std::string &file, std::string info, int line, unsigned int column);
         FileLocation(const Token* tok, const TokenList* tokenList);
         FileLocation(const Token* tok, std::string info, const TokenList* tokenList);
 
@@ -89,7 +85,7 @@ public:
         /**
          * @return the location as a string. Format: [file:line]
          */
-        std::string stringify() const;
+        std::string stringify(bool addcolumn = false) const;
 
         unsigned int fileIndex;
         int line; // negative value means "no line"
@@ -246,6 +242,13 @@ public:
     virtual void reportErr(const ErrorMessage &msg) = 0;
 
     /**
+     * Information about file metrics reported by addons.
+     *
+     * @param metric The file metric to report, as an XML object.
+     */
+    virtual void reportMetric(const std::string &metric) = 0;
+
+    /**
      * Report progress to client
      * @param filename main file that is checked
      * @param stage for example preprocess / tokenize / simplify / check
@@ -257,7 +260,7 @@ public:
         (void)value;
     }
 
-    static std::string callStackToString(const std::list<ErrorMessage::FileLocation> &callStack);
+    static std::string callStackToString(const std::list<ErrorMessage::FileLocation> &callStack, bool addcolumn = false);
 
     /**
      * Convert XML-sensitive characters into XML entities

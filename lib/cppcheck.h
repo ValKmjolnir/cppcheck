@@ -42,6 +42,7 @@ class AnalyzerInformation;
 class ErrorLogger;
 class Settings;
 struct Suppressions;
+class Preprocessor;
 
 namespace simplecpp { class TokenList; }
 
@@ -55,6 +56,8 @@ namespace simplecpp { class TokenList; }
  * Usage: See check() for more info.
  */
 class CPPCHECKLIB CppCheck {
+    friend class TestCppcheck;
+
 public:
     using ExecuteCmdFn = std::function<int (std::string,std::vector<std::string>,std::string,std::string&)>;
 
@@ -123,7 +126,6 @@ public:
     static void getErrorMessages(ErrorLogger &errorlogger);
 
     void tooManyConfigsError(const std::string &file, int numberOfConfigurations);
-    void purgedConfigurationMessage(const std::string &file, const std::string& configuration);
 
     /** Analyse whole program, run this after all TUs has been scanned.
      * This is deprecated and the plan is to remove this when
@@ -132,14 +134,14 @@ public:
      */
     bool analyseWholeProgram();
 
-    /** Analyze all files using clang-tidy */
-    void analyseClangTidy(const FileSettings &fileSettings);
-
     /** analyse whole program use .analyzeinfo files or ctuinfo string */
     unsigned int analyseWholeProgram(const std::string &buildDir, const std::list<FileWithDetails> &files, const std::list<FileSettings>& fileSettings, const std::string& ctuInfo);
 
     static void resetTimerResults();
     static void printTimerResults(SHOWTIME_MODES mode);
+
+private:
+    void purgedConfigurationMessage(const std::string &file, const std::string& configuration);
 
     bool isPremiumCodingStandardId(const std::string& id) const;
 
@@ -150,7 +152,9 @@ public:
 
     std::string getLibraryDumpData() const;
 
-private:
+    /** Analyze all files using clang-tidy */
+    void analyseClangTidy(const FileSettings &fileSettings);
+
 #ifdef HAVE_RULES
     /** Are there "simple" rules */
     bool hasRule(const std::string &tokenlist) const;
@@ -160,13 +164,22 @@ private:
     void internalError(const std::string &filename, const std::string &msg);
 
     /**
+     * @brief Calculate hash used to detect when a file needs to be reanalyzed.
+     *
+     * @param preprocessor  Preprocessor used to calculate the hash.
+     * @param tokens        Token list from preprocessed file.
+     * @return hash
+     */
+    std::size_t calculateHash(const Preprocessor &preprocessor, const simplecpp::TokenList &tokens) const;
+
+    /**
      * @brief Check a file using stream
      * @param file the file
      * @param cfgname  cfg name
      * @param fileStream stream the file content can be read from
      * @return number of errors found
      */
-    unsigned int checkFile(const FileWithDetails& file, const std::string &cfgname, std::istream* fileStream = nullptr);
+    unsigned int checkFile(const FileWithDetails& file, const std::string &cfgname, int fileIndex, std::istream* fileStream = nullptr);
 
     /**
      * @brief Check normal tokens
@@ -195,7 +208,7 @@ private:
     void executeRules(const std::string &tokenlist, const TokenList &list);
 #endif
 
-    unsigned int checkClang(const FileWithDetails &file);
+    unsigned int checkClang(const FileWithDetails &file, int fileIndex);
 
     const Settings& mSettings;
     Suppressions& mSuppressions;
@@ -206,9 +219,6 @@ private:
     ErrorLogger& mErrorLogger;
     /** the ErrorLogger provided to this instance */
     ErrorLogger& mErrorLoggerDirect;
-
-    /** @brief Current preprocessor configuration */
-    std::string mCurrentConfig;
 
     bool mUseGlobalSuppressions;
 

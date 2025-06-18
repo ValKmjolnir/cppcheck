@@ -38,6 +38,8 @@ private:
         settings.severity.fill();
         settings.certainty.fill();
 
+        mNewTemplate = true;
+
         // don't freak out when the syntax is wrong
 
         TEST_CASE(final_class_x);
@@ -288,8 +290,8 @@ private:
     template<size_t size>
     std::string checkCodeInternal_(const char* file, int line, const char (&code)[size], bool cpp) {
         // tokenize..
-        SimpleTokenizer tokenizer(settings, *this);
-        ASSERT_LOC(tokenizer.tokenize(code, cpp), file, line);
+        SimpleTokenizer tokenizer(settings, *this, cpp);
+        ASSERT_LOC(tokenizer.tokenize(code), file, line);
 
         // call all "runChecks" in all registered Check classes
         for (auto it = Check::instances().cbegin(); it != Check::instances().cend(); ++it) {
@@ -396,14 +398,14 @@ private:
         const char code[] = "class x y { };";
 
         {
-            SimpleTokenizer tokenizer(settings, *this);
-            ASSERT(tokenizer.tokenize(code, false));
+            SimpleTokenizer tokenizer(settings, *this, false);
+            ASSERT(tokenizer.tokenize(code));
             ASSERT_EQUALS("", errout_str());
         }
         {
             SimpleTokenizer tokenizer(settings, *this);
             ASSERT(tokenizer.tokenize(code));
-            ASSERT_EQUALS("[test.cpp:1]: (information) The code 'class x y {' is not handled. You can use -I or --include to add handling of this code.\n", errout_str());
+            ASSERT_EQUALS("[test.cpp:1:1]: (information) The code 'class x y {' is not handled. You can use -I or --include to add handling of this code. [class_X_Y]\n", errout_str());
         }
     }
 
@@ -1338,9 +1340,9 @@ private:
 
         // #8352
         ASSERT_THROW_INTERNAL(checkCode("else return % name5 name2 - =name1 return enum | { - name3 1 enum != >= 1 >= ++ { { || "
-                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { name6 | ; ++}}}}}}}"), SYNTAX);
+                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { name6 | ; ++}}}}}}}"), UNKNOWN_MACRO);
         ASSERT_THROW_INTERNAL(checkCode("else return % name5 name2 - =name1 return enum | { - name3 1 enum != >= 1 >= ++ { { || "
-                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { { || ; ++}}}}}}}}"), SYNTAX);
+                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { { || ; ++}}}}}}}}"), UNKNOWN_MACRO);
     }
 
     void templateSimplifierCrashes() {
@@ -1424,7 +1426,7 @@ private:
 
     void garbageCode162() {
         //7208
-        ASSERT_THROW_INTERNAL(checkCode("return <<  >>  x return <<  >>  x ", false), SYNTAX);
+        ASSERT_THROW_INTERNAL(checkCode("return <<  >>  x return <<  >>  x ", false), UNKNOWN_MACRO);
     }
 
     void garbageCode163() {
@@ -1880,6 +1882,9 @@ private:
                             "    auto fn = []() -> foo* { return new foo(); };\n"
                             "}"));
         ignore_errout(); // we do not care about the output
+
+        // #13892
+        ASSERT_NO_THROW(checkCode("void foovm(int x[const *]);"));
     }
 };
 

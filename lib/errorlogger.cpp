@@ -472,7 +472,7 @@ std::string ErrorMessage::fixInvalidChars(const std::string& raw)
         } else {
             std::ostringstream es;
             // straight cast to (unsigned) doesn't work out.
-            const unsigned uFrom = (unsigned char)*from;
+            const unsigned uFrom = static_cast<unsigned char>(*from);
             es << '\\' << std::setbase(8) << std::setw(3) << std::setfill('0') << uFrom;
             result += es.str();
         }
@@ -508,7 +508,7 @@ std::string ErrorMessage::toXML() const
 
     for (auto it = callStack.crbegin(); it != callStack.crend(); ++it) {
         printer.OpenElement("location", false);
-        printer.PushAttribute("file", it->getfile().c_str());
+        printer.PushAttribute("file", it->getfile(false).c_str());
         printer.PushAttribute("line", std::max(it->line,0));
         printer.PushAttribute("column", it->column);
         if (!it->getinfo().empty())
@@ -691,23 +691,30 @@ std::string ErrorMessage::toString(bool verbose, const std::string &templateForm
     return result;
 }
 
-std::string ErrorLogger::callStackToString(const std::list<ErrorMessage::FileLocation> &callStack)
+std::string ErrorLogger::callStackToString(const std::list<ErrorMessage::FileLocation> &callStack, bool addcolumn)
 {
     std::string str;
     for (auto tok = callStack.cbegin(); tok != callStack.cend(); ++tok) {
         str += (tok == callStack.cbegin() ? "" : " -> ");
-        str += tok->stringify();
+        str += tok->stringify(addcolumn);
     }
     return str;
 }
 
+ErrorMessage::FileLocation::FileLocation(const std::string &file, int line, unsigned int column)
+    : fileIndex(0), line(line), column(column), mOrigFileName(file), mFileName(Path::simplifyPath(file))
+{}
+
+ErrorMessage::FileLocation::FileLocation(const std::string &file, std::string info, int line, unsigned int column)
+    : fileIndex(0), line(line), column(column), mOrigFileName(file), mFileName(Path::simplifyPath(file)), mInfo(std::move(info))
+{}
 
 ErrorMessage::FileLocation::FileLocation(const Token* tok, const TokenList* tokenList)
-    : fileIndex(tok->fileIndex()), line(tok->linenr()), column(tok->column()), mOrigFileName(tokenList->getOrigFile(tok)), mFileName(tokenList->file(tok))
+    : fileIndex(tok->fileIndex()), line(tok->linenr()), column(tok->column()), mOrigFileName(tokenList->getOrigFile(tok)), mFileName(Path::simplifyPath(tokenList->file(tok)))
 {}
 
 ErrorMessage::FileLocation::FileLocation(const Token* tok, std::string info, const TokenList* tokenList)
-    : fileIndex(tok->fileIndex()), line(tok->linenr()), column(tok->column()), mOrigFileName(tokenList->getOrigFile(tok)), mFileName(tokenList->file(tok)), mInfo(std::move(info))
+    : fileIndex(tok->fileIndex()), line(tok->linenr()), column(tok->column()), mOrigFileName(tokenList->getOrigFile(tok)), mFileName(Path::simplifyPath(tokenList->file(tok))), mInfo(std::move(info))
 {}
 
 std::string ErrorMessage::FileLocation::getfile(bool convert) const
@@ -729,14 +736,18 @@ void ErrorMessage::FileLocation::setfile(std::string file)
     mFileName = Path::simplifyPath(std::move(file));
 }
 
-std::string ErrorMessage::FileLocation::stringify() const
+std::string ErrorMessage::FileLocation::stringify(bool addcolumn) const
 {
     std::string str;
     str += '[';
     str += Path::toNativeSeparators(mFileName);
-    if (line != SuppressionList::Suppression::NO_LINE) {
+    if (line != SuppressionList::Suppression::NO_LINE) { // TODO: should not depend on Suppression
         str += ':';
         str += std::to_string(line);
+        if (addcolumn) {
+            str += ':';
+            str += std::to_string(column);
+        }
     }
     str += ']';
     return str;
@@ -1012,7 +1023,7 @@ std::string getGuideline(const std::string &errId, ReportType reportType,
         }
         break;
     case ReportType::misraC:
-        if (errId.rfind("misra-c20", 0) == 0)
+        if (errId.rfind("misra-c20", 0) == 0 || errId.rfind("premium-misra-c-20", 0) == 0)
             guideline = errId.substr(errId.rfind('-') + 1);
         break;
     case ReportType::misraCpp2008:

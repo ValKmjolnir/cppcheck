@@ -200,7 +200,7 @@ void CheckType::checkIntegerOverflow()
             continue;
 
         // max value according to platform settings.
-        const MathLib::bigint maxvalue = (((MathLib::biguint)1) << (bits - 1)) - 1;
+        const MathLib::bigint maxvalue = (static_cast<MathLib::biguint>(1) << (bits - 1)) - 1;
 
         // is there a overflow result value
         bool isOverflow = true;
@@ -213,7 +213,7 @@ void CheckType::checkIntegerOverflow()
             continue;
 
         // For left shift, it's common practice to shift into the sign bit
-        if (tok->str() == "<<" && value->intvalue > 0 && value->intvalue < (((MathLib::bigint)1) << bits))
+        if (tok->str() == "<<" && value->intvalue > 0 && value->intvalue < (static_cast<MathLib::biguint>(1) << bits))
             continue;
 
         integerOverflowError(tok, *value, isOverflow);
@@ -322,8 +322,12 @@ static bool checkTypeCombination(ValueType src, ValueType tgt, const Settings& s
     src.reference = Reference::None;
     tgt.reference = Reference::None;
 
-    const std::size_t sizeSrc = ValueFlow::getSizeOf(src, settings);
-    const std::size_t sizeTgt = ValueFlow::getSizeOf(tgt, settings);
+    const std::size_t sizeSrc = ValueFlow::getSizeOf(src,
+                                                     settings,
+                                                     ValueFlow::Accuracy::ExactOrZero);
+    const std::size_t sizeTgt = ValueFlow::getSizeOf(tgt,
+                                                     settings,
+                                                     ValueFlow::Accuracy::ExactOrZero);
     if (!(sizeSrc > 0 && sizeTgt > 0 && sizeSrc < sizeTgt))
         return false;
 
@@ -507,7 +511,7 @@ void CheckType::checkFloatToIntegerOverflow(const Token *tok, const ValueType *v
                 bits = mSettings->platform.long_long_bit;
             else
                 continue;
-            if (bits < MathLib::bigint_bits && f.floatValue >= (((MathLib::biguint)1) << bits))
+            if (bits < MathLib::bigint_bits && f.floatValue >= (static_cast<MathLib::biguint>(1) << bits))
                 floatToIntegerOverflowError(tok, f);
         }
     }

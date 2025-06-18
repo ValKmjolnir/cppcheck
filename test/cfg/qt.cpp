@@ -665,9 +665,9 @@ namespace {
     class Fred : public QObject {
         Q_OBJECT
     private slots:
-        // cppcheck-suppress functionStatic
         void foo();
     };
+    // cppcheck-suppress functionStatic
     void Fred::foo() {}
 
     // bitfields14
@@ -799,6 +799,27 @@ void constVariablePointer_QVector(QVector<int*>& qv, int* p)
     qv.push_back(p); // #12661
 }
 
+void constParameterPointer_QHash_insert(QHash<int*, int*>& qh, int* k, int* v)
+{
+    qh.insert(k, v); // #13902
+}
+
+bool constParameterPointer_QHash_find(const QHash<int*, int*>& qh, int* k)
+{
+    auto it = qh.find(k);
+    return it != qh.end();
+}
+
+bool constParameterPointer_QHash_contains(const QHash<int*, int*>& qh, int* k)
+{
+    return qh.contains(k);
+}
+
+int constParameterPointer_QHash_count(const QHash<int*, int*>& qh, int* k)
+{
+    return qh.count(k);
+}
+
 const QString& unassignedVariable_static_QString() // #12935
 {
     static QString qs;
@@ -816,7 +837,6 @@ struct DQObject_missingOverride : BQObject_missingOverride {
 namespace {
     class TestUnusedFunction : public QObject { // #13236
         TestUnusedFunction();
-        // cppcheck-suppress functionStatic
         void doStuff();
     };
 
@@ -824,5 +844,6 @@ namespace {
         QObject::connect(this, SIGNAL(doStuff()), SLOT(doStuff()));
     }
 
+    // cppcheck-suppress functionStatic
     void TestUnusedFunction::doStuff() {} // Should not warn here with unusedFunction
 }

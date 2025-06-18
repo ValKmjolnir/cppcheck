@@ -22,6 +22,8 @@
 #include "filesettings.h"
 #include "fixture.h"
 #include "helpers.h"
+#include "path.h"
+#include "preprocessor.h"
 #include "settings.h"
 #include "suppressions.h"
 
@@ -51,6 +53,10 @@ private:
             ids.push_back(msg.id);
             errmsgs.push_back(msg);
         }
+
+        void reportMetric(const std::string &metric) override {
+            (void) metric;
+        }
     };
 
     void run() override {
@@ -63,6 +69,7 @@ private:
         TEST_CASE(isPremiumCodingStandardId);
         TEST_CASE(getDumpFileContentsRawTokens);
         TEST_CASE(getDumpFileContentsLibrary);
+        TEST_CASE(premiumResultsCache);
     }
 
     void getErrorMessages() const {
@@ -112,12 +119,11 @@ private:
                         "  return 0;\n"
                         "}");
 
-        /*const*/ Settings s;
-        s.templateFormat = templateFormat;
+        const auto s = dinit(Settings, $.templateFormat = templateFormat);
         Suppressions supprs;
         ErrorLogger2 errorLogger;
         CppCheck cppcheck(s, supprs, errorLogger, false, {});
-        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(file.path())));
+        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(file.path(), Path::identify(file.path(), false), 0)));
         // TODO: how to properly disable these warnings?
         errorLogger.ids.erase(std::remove_if(errorLogger.ids.begin(), errorLogger.ids.end(), [](const std::string& id) {
             return id == "logChecker";
@@ -135,12 +141,11 @@ private:
                         "  return 0;\n"
                         "}");
 
-        /*const*/ Settings s;
-        s.templateFormat = templateFormat;
+        const auto s = dinit(Settings, $.templateFormat = templateFormat);
         Suppressions supprs;
         ErrorLogger2 errorLogger;
         CppCheck cppcheck(s, supprs, errorLogger, false, {});
-        FileSettings fs{file.path()};
+        FileSettings fs{file.path(), Path::identify(file.path(), false), 0};
         ASSERT_EQUALS(1, cppcheck.check(fs));
         // TODO: how to properly disable these warnings?
         errorLogger.ids.erase(std::remove_if(errorLogger.ids.begin(), errorLogger.ids.end(), [](const std::string& id) {
@@ -164,7 +169,7 @@ private:
         Suppressions supprs;
         ErrorLogger2 errorLogger;
         CppCheck cppcheck(s, supprs, errorLogger, false, {});
-        ASSERT_EQUALS(0, cppcheck.check(FileWithDetails(file.path())));
+        ASSERT_EQUALS(0, cppcheck.check(FileWithDetails(file.path(), Path::identify(file.path(), false), 0)));
         // TODO: how to properly disable these warnings?
         errorLogger.ids.erase(std::remove_if(errorLogger.ids.begin(), errorLogger.ids.end(), [](const std::string& id) {
             return id == "logChecker";
@@ -185,14 +190,13 @@ private:
         ScopedFile test_file_b("b.cpp",
                                "#include \"inc.h\"");
 
-        /*const*/ Settings s;
         // this is the "simple" format
-        s.templateFormat = templateFormat; // TODO: remove when we only longer rely on toString() in unique message handling
+        const auto s = dinit(Settings, $.templateFormat = templateFormat); // TODO: remove when we only longer rely on toString() in unique message handling
         Suppressions supprs;
         ErrorLogger2 errorLogger;
         CppCheck cppcheck(s, supprs, errorLogger, false, {});
-        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(test_file_a.path())));
-        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(test_file_b.path())));
+        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(test_file_a.path(), Path::identify(test_file_a.path(), false), 0)));
+        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(test_file_b.path(), Path::identify(test_file_b.path(), false), 0)));
         // TODO: how to properly disable these warnings?
         errorLogger.errmsgs.erase(std::remove_if(errorLogger.errmsgs.begin(), errorLogger.errmsgs.end(), [](const ErrorMessage& msg) {
             return msg.id == "logChecker";
@@ -218,13 +222,12 @@ private:
                              "(void)b;\n"
                              "}");
 
-        /*const*/ Settings s;
         // this is the "simple" format
-        s.templateFormat = templateFormat; // TODO: remove when we only longer rely on toString() in unique message handling?
+        const auto s = dinit(Settings, $.templateFormat = templateFormat); // TODO: remove when we only longer rely on toString() in unique message handling?
         Suppressions supprs;
         ErrorLogger2 errorLogger;
         CppCheck cppcheck(s, supprs, errorLogger, false, {});
-        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(test_file.path())));
+        ASSERT_EQUALS(1, cppcheck.check(FileWithDetails(test_file.path(), Path::identify(test_file.path(), false), 0)));
         // TODO: how to properly disable these warnings?
         errorLogger.errmsgs.erase(std::remove_if(errorLogger.errmsgs.begin(), errorLogger.errmsgs.end(), [](const ErrorMessage& msg) {
             return msg.id == "logChecker";
@@ -256,39 +259,40 @@ private:
         ErrorLogger2 errorLogger;
 
         {
-            Settings s;
-            s.premiumArgs = "";
+            const auto s = dinit(Settings, $.premiumArgs = "");
             CppCheck cppcheck(s, supprs, errorLogger, false, {});
 
             ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("misra-c2012-0.0"));
             ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("misra-c2023-0.0"));
-            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c2012-0.0"));
-            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c2023-0.0"));
-            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c++2008-0.0.0"));
-            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c++2023-0.0.0"));
+            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c-2012-0.0"));
+            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c-2023-0.0"));
+            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c-2025-0.0"));
+            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c-2025-dir-0.0"));
+            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c++-2008-0-0-0"));
+            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-misra-c++-2023-0.0.0"));
             ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-cert-int50-cpp"));
             ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("premium-autosar-0-0-0"));
         }
 
         {
-            Settings s;
-            s.premiumArgs = "--misra-c-2012 --cert-c++-2016 --autosar";
+            const auto s = dinit(Settings, $.premiumArgs = "--misra-c-2012 --cert-c++-2016 --autosar");
 
             CppCheck cppcheck(s, supprs, errorLogger, false, {});
 
-            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("misra-c2012-0.0"));
-            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("misra-c2023-0.0"));
-            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c2012-0.0"));
-            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c2023-0.0"));
-            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c++2008-0.0.0"));
-            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c++2023-0.0.0"));
+            ASSERT_EQUALS(false, cppcheck.isPremiumCodingStandardId("misra-c2012-0.0"));
+            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c-2012-0.0"));
+            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c-2023-0.0"));
+            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c-2025-0.0"));
+            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c-2025-dir-0.0"));
+            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c++-2008-0-0-0"));
+            ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-misra-c++-2023-0.0.0"));
             ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-cert-int50-cpp"));
             ASSERT_EQUALS(true, cppcheck.isPremiumCodingStandardId("premium-autosar-0-0-0"));
         }
     }
 
     void getDumpFileContentsRawTokens() const {
-        Settings s = settingsBuilder().build();
+        Settings s;
         s.relativePaths = true;
         s.basePaths.emplace_back("/some/path");
         Suppressions supprs;
@@ -323,6 +327,40 @@ private:
             const std::string expected = "  <library lib=\"std.cfg\"/>\n  <library lib=\"posix.cfg\"/>\n";
             ASSERT_EQUALS(expected, cppcheck.getLibraryDumpData());
         }
+    }
+
+    void premiumResultsCache() const {
+        // Trac #13889 - cached misra results are shown after removing --premium=misra-c-2012 option
+
+        Settings settings;
+        Suppressions supprs;
+        ErrorLogger2 errorLogger;
+
+        std::vector<std::string> files;
+
+        std::istringstream istr("void f();\nint x;\n");
+        const simplecpp::TokenList tokens(istr, files, "m1.c");
+
+        Preprocessor preprocessor(settings, errorLogger, Standards::Language::C);
+        ASSERT(preprocessor.loadFiles(tokens, files));
+
+        AddonInfo premiumaddon;
+        premiumaddon.name = "premiumaddon.json";
+        premiumaddon.executable = "premiumaddon";
+
+        settings.cppcheckCfgProductName = "Cppcheck Premium 0.0.0";
+        settings.addons.insert(premiumaddon.name);
+        settings.addonInfos.push_back(premiumaddon);
+
+        settings.premiumArgs = "misra-c-2012";
+        CppCheck check(settings, supprs, errorLogger, false, {});
+        const size_t hash1 = check.calculateHash(preprocessor, tokens);
+
+        settings.premiumArgs = "";
+        const size_t hash2 = check.calculateHash(preprocessor, tokens);
+
+        // cppcheck-suppress knownConditionTrueFalse
+        ASSERT(hash1 != hash2);
     }
 
     // TODO: test suppressions
